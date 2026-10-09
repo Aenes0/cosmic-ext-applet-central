@@ -72,11 +72,29 @@ O botão de desfazer no topo restaura o padrão. A escolha fica salva na configu
 
 ## Instalar
 
-Pela COSMIC Store (Flatpak), ou a partir do código:
+Pela COSMIC Store (Flatpak), que funciona em qualquer distribuição, ou a partir do código:
 
 ```sh
 ./install.sh            # instala em ~/.local
 ```
+
+Pelo código, funciona no Fedora, no Debian e derivados (Ubuntu, Pop!_OS, Mint…) e no Arch e
+derivados (Manjaro, EndeavourOS…). O `install.sh` chama o `deps.sh`, que instala com `dnf`,
+`apt` ou `pacman` o que faltar para compilar e os programas que o applet usa (`wpctl`,
+`pw-dump`, `pactl`, `curl`). O libcosmic pede Rust 1.93 ou mais novo, mais novo que o de
+várias distribuições (Debian, Ubuntu e Pop!_OS LTS): se o do sistema for antigo, o script
+avisa; instale o Rust pelo [rustup](https://rustup.rs) e rode de novo.
+
+Os serviços que ele mostra ficam por conta da distribuição, e cada bloco só funciona com o
+seu:
+
+| Bloco | Precisa de | |
+| --- | --- | --- |
+| Wi-Fi | NetworkManager | sem ele (só `iwd` ou `systemd-networkd`, comum no Arch), o bloco não funciona |
+| Bluetooth | BlueZ | |
+| Bateria | UPower | |
+| Energia | power-profiles-daemon, ou o tuned-ppd do Fedora | o Pop!_OS usa o `system76-power`; sem um serviço que responda como o power-profiles-daemon, o bloco não funciona |
+| Som | PipeWire com WirePlumber | o padrão nas distribuições atuais |
 
 ### Flatpak
 

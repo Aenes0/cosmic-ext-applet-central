@@ -8,6 +8,8 @@ prefix="${1:-$HOME/.local}"
 id=io.github.DrakRosmann.CosmicExtAppletQuickSettings
 bin=cosmic-ext-applet-quick-settings
 
+# In a Flatpak build the manifest brings what's needed.
+[ -f /.flatpak-info ] || "$(dirname "$0")/deps.sh"
 cargo build --release
 install -Dm0755 "target/release/$bin" "$prefix/bin/$bin"
 mkdir -p "$prefix/share/applications"
