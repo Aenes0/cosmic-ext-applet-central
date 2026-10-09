@@ -1,0 +1,1 @@
+# cosmic-ext-applet-quick-settings
