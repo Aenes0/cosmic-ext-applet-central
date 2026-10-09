@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Quick Settings
+Name[pt_BR]=Configurações rápidas
+Comment=Wi-Fi, Bluetooth, volume, brightness and more in one place, like the macOS Control Center
+Comment[pt_BR]=Wi-Fi, Bluetooth, volume, brilho e mais num lugar só, como a Central de Controle do macOS
+Type=Application
+Exec=@bindir@/cosmic-ext-applet-quick-settings
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Settings;Control;Quick;
+Icon=io.github.DrakRosmann.CosmicExtAppletQuickSettings
+NoDisplay=true
+X-CosmicApplet=true
+X-NotificationsApplet=true
+X-HostWaylandDisplay=true

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- The popup: two sliders over four tiles, two of them on. -->
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#2b2b2b"/>
+  <rect x="22" y="24" width="84" height="8" rx="4" fill="#4a4a4a"/>
+  <rect x="22" y="24" width="56" height="8" rx="4" fill="#f4a8b4"/>
+  <circle cx="78" cy="28" r="7" fill="#ffffff"/>
+  <rect x="22" y="42" width="84" height="8" rx="4" fill="#4a4a4a"/>
+  <rect x="22" y="42" width="34" height="8" rx="4" fill="#f4a8b4"/>
+  <circle cx="56" cy="46" r="7" fill="#ffffff"/>
+  <rect x="22" y="62" width="40" height="18" rx="9" fill="#f4a8b4"/>
+  <rect x="66" y="62" width="40" height="18" rx="9" fill="#4a4a4a"/>
+  <rect x="22" y="86" width="40" height="18" rx="9" fill="#4a4a4a"/>
+  <rect x="66" y="86" width="40" height="18" rx="9" fill="#94c4f0"/>
+  <circle cx="32" cy="71" r="4" fill="#2b2b2b"/>
+  <circle cx="76" cy="71" r="4" fill="#bdbdbd"/>
+  <circle cx="32" cy="95" r="4" fill="#bdbdbd"/>
+  <circle cx="76" cy="95" r="4" fill="#2b2b2b"/>
+</svg>
