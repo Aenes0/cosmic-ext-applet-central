@@ -12,7 +12,7 @@ use cosmic::{
 };
 
 use crate::{
-    app::{App, Dnd, Message, Page},
+    app::{App, Dnd, MAX_HEIGHT, Message, Page},
     media::Control,
     notifications::Notification,
     i18n::strings,
@@ -21,6 +21,9 @@ use crate::{
         symbolic,
     },
 };
+
+/// The edit button's row at the bottom of the quick settings.
+const FOOTER_HEIGHT: f32 = 36.0;
 
 /// A row of a page: icon, title, maybe a subtitle, maybe something at the end.
 fn item<'a>(
@@ -936,21 +939,23 @@ impl App {
                 widget::tooltip::Position::Top,
             )
             .into(),
-        ]);
+        ])
+        .height(Length::Fixed(FOOTER_HEIGHT))
+        .align_y(Alignment::Center);
         let mut sections = vec![self.header()];
         sections.extend(self.privacy_banner());
         sections.extend([self.sliders(), self.tiles()]);
         sections.extend(self.media_card());
+        // Last, so that it gets what the controls leave: the controls stay
+        // put and only the notifications scroll.
         sections.extend(self.notifications_list());
-        sections.push(footer.into());
-        // Taller than the screen, with all of it open: it scrolls.
-        widget::scrollable(
-            widget::column::with_children(sections)
-                .spacing(spacing.space_s)
-                .padding([spacing.space_s, spacing.space_s, spacing.space_xxs, spacing.space_s]),
-        )
-        .height(Length::Shrink)
-        .into()
+        let (top, bottom) = (f32::from(spacing.space_s), f32::from(spacing.space_xxs));
+        let body = widget::container(widget::column::with_children(sections).spacing(spacing.space_s))
+            .max_height(MAX_HEIGHT - top - bottom - FOOTER_HEIGHT - f32::from(spacing.space_s));
+        widget::column::with_children(vec![body.into(), footer.into()])
+            .spacing(spacing.space_s)
+            .padding([spacing.space_s, spacing.space_s, spacing.space_xxs, spacing.space_s])
+            .into()
     }
 
     /// Who is using the camera or the microphone.
@@ -1213,13 +1218,11 @@ impl App {
                 );
             }
         }
+        // As tall as the popup lets it be under the controls.
         let list = widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
             .height(Length::Shrink);
         Some(
-            widget::column::with_children(vec![
-                header.into(),
-                widget::container(list).max_height(320.0).into(),
-            ])
+            widget::column::with_children(vec![header.into(), list.into()])
             .spacing(spacing.space_xs)
             .into(),
         )

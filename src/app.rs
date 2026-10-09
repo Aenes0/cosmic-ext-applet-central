@@ -29,6 +29,8 @@ use crate::{
 };
 
 const WIDTH: f32 = 420.0;
+/// The popup grows with what it shows up to this; past it the notifications scroll.
+pub const MAX_HEIGHT: f32 = 800.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -380,7 +382,7 @@ fn popup_limits() -> Limits {
         .min_width(WIDTH)
         .max_width(WIDTH)
         .min_height(1.0)
-        .max_height(800.0)
+        .max_height(MAX_HEIGHT)
 }
 
 impl cosmic::Application for App {
