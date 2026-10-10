@@ -109,16 +109,29 @@ enum Service {
 }
 
 impl Service {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Network => "org.freedesktop.NetworkManager",
+            Self::Bluetooth => "org.bluez",
+            Self::Battery | Self::Peripherals => "org.freedesktop.UPower",
+            Self::PowerProfiles => "net.hadess.PowerProfiles",
+            Self::Brightness => "com.system76.CosmicSettingsDaemon",
+        }
+    }
+
     fn rules(self) -> Vec<MatchRule<'static>> {
-        vec![match self {
-            Self::Network => properties_changed("org.freedesktop.NetworkManager"),
-            Self::Bluetooth => signals_from("org.bluez"),
-            Self::Battery => properties_changed("org.freedesktop.UPower"),
-            // Devices come and go, too.
-            Self::Peripherals => signals_from("org.freedesktop.UPower"),
-            Self::PowerProfiles => properties_changed("net.hadess.PowerProfiles"),
-            Self::Brightness => properties_changed("com.system76.CosmicSettingsDaemon"),
-        }]
+        let name = self.name();
+        vec![
+            match self {
+                // Devices come and go, too.
+                Self::Bluetooth | Self::Peripherals => signals_from(name),
+                _ => properties_changed(name),
+            },
+            // It starting, late at login (COSMIC's settings daemon often
+            // comes up after the panel), or again after a crash: it says
+            // nothing else then.
+            owner_changed(name),
+        ]
     }
 
     async fn bus(self) -> zbus::Result<zbus::Connection> {
@@ -183,6 +196,20 @@ fn properties_changed(sender: &'static str) -> MatchRule<'static> {
         .interface("org.freedesktop.DBus.Properties")
         .unwrap()
         .member("PropertiesChanged")
+        .unwrap()
+        .build()
+}
+
+fn owner_changed(name: &'static str) -> MatchRule<'static> {
+    MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")
+        .unwrap()
+        .interface("org.freedesktop.DBus")
+        .unwrap()
+        .member("NameOwnerChanged")
+        .unwrap()
+        .arg(0, name)
         .unwrap()
         .build()
 }

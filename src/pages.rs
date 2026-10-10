@@ -1561,12 +1561,15 @@ impl App {
                 widget::tooltip::Position::Bottom,
             )
         };
-        row.push(action("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)))
+        // Close together, to leave the battery room for a long time left.
+        let actions = widget::row::with_capacity(5)
+            .spacing(theme::spacing().space_xxs)
+            .push(action("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)))
             .push(action("accessories-screenshot-symbolic", t.screenshot, Message::Screenshot))
             .push(action("emblem-system-symbolic", t.settings, Message::Settings(None)))
             .push(action("system-lock-screen-symbolic", t.lock, Message::Lock))
-            .push(action("system-shutdown-symbolic", t.session, Message::ShowPage(Page::Session)))
-            .into()
+            .push(action("system-shutdown-symbolic", t.session, Message::ShowPage(Page::Session)));
+        row.push(actions).into()
     }
 
     /// Volume and brightness, thick, as phones have them, each with a round
