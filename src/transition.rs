@@ -182,6 +182,13 @@ impl<Message> Widget<Message, cosmic::Theme, cosmic::Renderer> for Transition<'_
             Motion::Open => Vector::new(0.0, -DROP * rest),
             Motion::Swap => Vector::ZERO,
         };
+        // The panels the page is made of: the veil is over them, not the
+        // room between them, where the screen shows.
+        let panels: Vec<Rectangle> = match content(layout).children().map(|c| c.bounds()).collect::<Vec<_>>() {
+            panels if panels.is_empty() => vec![bounds],
+            panels => panels,
+        };
+        let radius = theme.cosmic().corner_radii.radius_m;
         renderer.with_layer(bounds, |renderer| {
             renderer.with_translation(offset, |renderer| {
                 self.content.as_widget().draw(
@@ -193,17 +200,23 @@ impl<Message> Widget<Message, cosmic::Theme, cosmic::Renderer> for Transition<'_
                     cursor,
                     viewport,
                 );
+                // Fade in: a veil of the popup's own color, thinning out.
+                let mut veil: Color = theme.cosmic().background(theme.transparent).base.into();
+                veil.a *= rest;
+                for panel in &panels {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: *panel,
+                            border: cosmic::iced::Border {
+                                radius: radius.into(),
+                                ..Default::default()
+                            },
+                            ..renderer::Quad::default()
+                        },
+                        veil,
+                    );
+                }
             });
-            // Fade in: a veil of the popup's own color, thinning out.
-            let mut veil: Color = theme.cosmic().background(theme.transparent).base.into();
-            veil.a *= rest;
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    ..renderer::Quad::default()
-                },
-                veil,
-            );
         });
     }
 

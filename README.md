@@ -43,9 +43,10 @@ tempo restante, cada bloco ligado. Clicar abre:
   anterior/play/próxima numa linha, e o progresso (arrastável) embaixo; com mais de um
   player, "1/2 ›" passa para o próximo (um player que começa a tocar vem para a frente); o
   alto-falante escolhe a saída de som ali mesmo;
-- **notificações** recebidas, das mais novas para as mais antigas, as de um mesmo app
-  juntas (só a mais nova, empilhada sobre as outras como no iOS, com "+N mais" para ver o
-  resto): clicar abre, os botões do app
+- **notificações** recebidas, num painel à parte, abaixo dos controles, como no Android
+  (sem nenhuma, ele diz isso numa linha): das mais novas para as mais antigas, as de um
+  mesmo app juntas (só a mais nova, com "+N" no cartão para ver o resto): clicar abre, os
+  botões do app
   (como Responder ou Marcar como lida) aparecem no card, "×" dispensa, "Limpar tudo"
   limpa. Elas continuam lá depois de reiniciar a sessão. O applet se apresenta ao painel
   como applet de notificações (`X-NotificationsApplet`) e recebe as notificações do daemon

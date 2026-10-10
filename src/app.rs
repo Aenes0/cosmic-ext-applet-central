@@ -14,6 +14,7 @@ use cosmic::{
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::{
+    pages,
     audio::{self, Mixer, Privacy},
     i18n::strings,
     workspaces,
@@ -1332,20 +1333,23 @@ impl cosmic::Application for App {
         let page = self.page.unwrap_or(Page::Main);
         let content = match page {
             Page::Main => self.main_page(),
-            Page::Edit => self.edit_page(),
-            Page::Wifi => self.wifi_page(),
-            Page::Bluetooth => self.bluetooth_page(),
-            Page::Power => self.power_page(),
-            Page::Sound => self.sound_page(),
-            Page::Displays => self.displays_page(),
-            Page::Tiling => self.tiling_page(),
-            Page::DoNotDisturb => self.dnd_page(),
-            Page::Session => self.session_page(),
+            Page::Edit => pages::panel(self.edit_page()),
+            Page::Wifi => pages::panel(self.wifi_page()),
+            Page::Bluetooth => pages::panel(self.bluetooth_page()),
+            Page::Power => pages::panel(self.power_page()),
+            Page::Sound => pages::panel(self.sound_page()),
+            Page::Displays => pages::panel(self.displays_page()),
+            Page::Tiling => pages::panel(self.tiling_page()),
+            Page::DoNotDisturb => pages::panel(self.dnd_page()),
+            Page::Session => pages::panel(self.session_page()),
         };
         let depth = if page == Page::Main { 0 } else { 1 };
-        self.core
-            .applet
-            .popup_container(Transition::new(page as u64, depth, content))
+        // The pages draw their own panels, apart, instead of the applet's
+        // popup, all one: as applets' popups are sized.
+        cosmic::widget::autosize::autosize(
+            Transition::new(page as u64, depth, content),
+            cosmic::widget::Id::new("cosmic-applet-autosize"),
+        )
             .limits(popup_limits(self.max_height()))
             .into()
     }

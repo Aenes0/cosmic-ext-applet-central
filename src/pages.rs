@@ -105,7 +105,7 @@ fn card_container<'a>(
                 text_color: Some(component.on.into()),
                 icon_color: Some(component.on.into()),
                 border: iced::Border {
-                    radius: theme.cosmic().radius_l().into(),
+                    radius: theme.cosmic().radius_l()[0].min(CARD_RADIUS).into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -121,7 +121,7 @@ fn card_class() -> theme::Button {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),
             )),
-            border_radius: cosmic.radius_l().into(),
+            border_radius: cosmic.radius_l()[0].min(CARD_RADIUS).into(),
             text_color: Some(component.on.into()),
             icon_color: Some(component.on.into()),
             ..button::Style::new()
@@ -238,6 +238,34 @@ fn play_class(color: [u8; 3]) -> theme::Button {
     }
 }
 
+/// Cards' corners: rounded, never a pill, however round the theme.
+const CARD_RADIUS: f32 = 16.0;
+/// Between the popup's panels.
+pub const PANEL_GAP: f32 = 8.0;
+
+/// A panel of the popup, as COSMIC draws a popup: there are two on the main
+/// page, the controls and the notifications, apart.
+pub fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    widget::container(content)
+        .width(Length::Fill)
+        .class(theme::Container::custom(|theme| {
+            let cosmic = theme.cosmic();
+            let background = cosmic.background(theme.transparent);
+            widget::container::Style {
+                background: Some(Background::Color(background.base.into())),
+                text_color: Some(background.on.into()),
+                icon_color: Some(background.on.into()),
+                border: iced::Border {
+                    radius: cosmic.corner_radii.radius_m.into(),
+                    width: 1.0,
+                    color: background.divider.into(),
+                },
+                ..Default::default()
+            }
+        }))
+        .into()
+}
+
 /// A round button with an icon, `size` across, like the tiles when off.
 fn circle_button<'a>(icon_name: &str, message: Message, size: f32) -> widget::Button<'a, Message> {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
@@ -263,6 +291,29 @@ fn circle_button<'a>(icon_name: &str, message: Message, size: f32) -> widget::Bu
         pressed: Box::new(move |_, theme| style(true, theme)),
     })
     .on_press(message)
+}
+
+/// A pill on a card: a shade lighter than it.
+fn on_card_class() -> theme::Button {
+    let style = |hovered: bool, theme: &cosmic::Theme| {
+        let cosmic = theme.cosmic();
+        let component = &cosmic.background(theme.transparent).component;
+        button::Style {
+            background: Some(Background::Color(
+                if hovered { component.pressed } else { component.hover }.into(),
+            )),
+            border_radius: cosmic.radius_xl().into(),
+            text_color: Some(component.on.into()),
+            icon_color: Some(component.on.into()),
+            ..button::Style::new()
+        }
+    };
+    theme::Button::Custom {
+        active: Box::new(move |_, theme| style(false, theme)),
+        disabled: Box::new(move |theme| style(false, theme)),
+        hovered: Box::new(move |_, theme| style(true, theme)),
+        pressed: Box::new(move |_, theme| style(true, theme)),
+    }
 }
 
 /// The battery pill: lighter when hovered.
@@ -1022,19 +1073,23 @@ impl App {
         widget::scrollable(column.padding(spacing.space_s)).height(Length::Shrink).into()
     }
 
+    /// Two panels, apart, as Android's shade: the controls, and under them
+    /// the notifications, which get what the controls leave: the controls
+    /// stay put and only the notifications scroll.
     pub fn main_page(&self) -> Element<'_, Message> {
         let spacing = theme::spacing();
         let mut sections = vec![self.header()];
         sections.extend(self.privacy_banner());
         sections.extend([self.sliders(), self.tiles()]);
         sections.extend(self.media_card());
-        // Last, so that it gets what the controls leave: the controls stay
-        // put and only the notifications scroll.
-        sections.extend(self.notifications_list());
-        let padding = f32::from(spacing.space_s);
-        widget::container(widget::column::with_children(sections).spacing(spacing.space_s))
-            .max_height(self.max_height() - 2.0 * padding)
-            .padding(spacing.space_s)
+        let controls = panel(
+            widget::column::with_children(sections)
+                .spacing(spacing.space_s)
+                .padding(spacing.space_s),
+        );
+        // As tall as the popup's limits let it be, from the screen's height.
+        widget::column::with_children(vec![controls, panel(self.notifications_panel())])
+            .spacing(PANEL_GAP)
             .into()
     }
 
@@ -1270,13 +1325,27 @@ impl App {
         })
     }
 
-    /// The notifications received, newest first, with a way to clear them.
-    fn notifications_list(&self) -> Option<Element<'_, Message>> {
-        if self.notifications.is_empty() {
-            return None;
-        }
+    /// The notifications received, newest first, with a way to clear them;
+    /// or that there are none.
+    fn notifications_panel(&self) -> Element<'_, Message> {
         let t = strings();
         let spacing = theme::spacing();
+        if self.notifications.is_empty() {
+            // As Android says it, in a line: little room may be left.
+            return widget::container(
+                widget::row::with_children(vec![
+                    widget::icon::icon(icon("notification-symbolic")).size(16).into(),
+                    widget::text::body(t.all_caught_up)
+                        .class(theme::Text::Custom(dimmed))
+                        .into(),
+                ])
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center),
+            )
+            .center_x(Length::Fill)
+            .padding(spacing.space_s)
+            .into();
+        }
         let header = widget::row::with_children(vec![
             widget::text::heading(t.notifications).width(Length::Fill).into(),
             button::custom(
@@ -1292,10 +1361,11 @@ impl App {
             .on_press(Message::ClearNotifications)
             .into(),
         ])
+        .padding([0, 0, 0, spacing.space_xxs])
         .align_y(Alignment::Center);
 
-        // An app's notifications together, where its newest is; only that one
-        // until asked for the rest.
+        // An app's notifications together, where its newest is; only that one,
+        // with how many more, until asked for the rest.
         let mut groups: Vec<(&str, Vec<&Notification>)> = Vec::new();
         for notification in &self.notifications {
             match groups.iter_mut().find(|(app, _)| *app == notification.app) {
@@ -1305,85 +1375,45 @@ impl App {
         }
         let mut cards: Vec<Element<'_, Message>> = Vec::new();
         for (app, group) in groups {
-            let expanded = self.expanded.contains(app);
-            if expanded || group.len() == 1 {
+            let expanded = group.len() > 1 && self.expanded.contains(app);
+            if expanded {
                 for notification in &group {
-                    cards.push(self.notification_card(notification));
+                    cards.push(self.notification_card(notification, None));
                 }
-            } else {
-                // The rest of a group, stacked under its newest, as phones do.
-                let edge = |inset: f32, alpha: f32| -> Element<'_, Message> {
-                    widget::container(
-                        widget::container(widget::space::vertical().height(Length::Fixed(6.0)))
-                            .width(Length::Fill)
-                            .class(theme::Container::custom(move |theme| {
-                                let mut color: iced::Color = theme
-                                    .cosmic()
-                                    .background(theme.transparent)
-                                    .component
-                                    .base
-                                    .into();
-                                color.a *= alpha;
-                                widget::container::Style {
-                                    background: Some(Background::Color(color)),
-                                    border: iced::Border {
-                                        radius: [0.0, 0.0, 10.0, 10.0].into(),
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                }
-                            })),
-                    )
-                    .padding([0.0, inset])
-                    .into()
-                };
-                let mut stack = widget::column::with_capacity(3)
-                    .push(self.notification_card(group[0]))
-                    .push(edge(10.0, 0.7));
-                if group.len() > 2 {
-                    stack = stack.push(edge(22.0, 0.4));
-                }
-                cards.push(stack.into());
-            }
-            if group.len() > 1 {
-                let label = if expanded {
-                    format!("{app} · {}", group.len())
-                } else {
-                    format!("+{} {} · {app}", group.len() - 1, t.more)
-                };
                 cards.push(
                     button::custom(
                         widget::row::with_children(vec![
-                            widget::text::caption(label).class(theme::Text::Custom(dimmed)).into(),
-                            widget::icon::icon(icon(if expanded {
-                                "go-up-symbolic"
-                            } else {
-                                "go-down-symbolic"
-                            }))
-                            .size(12)
-                            .into(),
+                            widget::text::caption(t.show_less).into(),
+                            widget::icon::icon(icon("go-up-symbolic")).size(12).into(),
                         ])
                         .spacing(spacing.space_xxs)
                         .align_y(Alignment::Center),
                     )
-                    .padding([2, 12])
-                    .class(theme::Button::Text)
+                    .padding([4, 12])
+                    .class(pill_class())
                     .on_press(Message::ToggleGroup(app.to_owned()))
                     .into(),
                 );
+            } else {
+                let more = (group.len() > 1).then(|| (group.len() - 1, app.to_owned()));
+                cards.push(self.notification_card(group[0], more));
             }
         }
-        // As tall as the popup lets it be under the controls.
         let list = widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
             .height(Length::Shrink);
-        Some(
-            widget::column::with_children(vec![header.into(), list.into()])
+        widget::column::with_children(vec![header.into(), list.into()])
             .spacing(spacing.space_xs)
-            .into(),
-        )
+            .padding(spacing.space_s)
+            .into()
     }
 
-    fn notification_card<'a>(&'a self, notification: &'a Notification) -> Element<'a, Message> {
+    /// A notification as a card; `more`, how many more its app has, and the
+    /// app, behind a count that shows them.
+    fn notification_card<'a>(
+        &'a self,
+        notification: &'a Notification,
+        more: Option<(usize, String)>,
+    ) -> Element<'a, Message> {
         let t = strings();
         let spacing = theme::spacing();
         let app_icon = if notification.icon.starts_with('/') {
@@ -1405,7 +1435,7 @@ impl App {
         } else {
             format!("{} · {ago}", notification.app)
         };
-        let mut source = widget::row::with_capacity(2)
+        let mut source = widget::row::with_capacity(3)
             .push(widget::text::caption(source_text).class(theme::Text::Custom(dimmed)))
             .spacing(spacing.space_xxs)
             .align_y(Alignment::Center);
@@ -1425,9 +1455,15 @@ impl App {
                     })),
             );
         }
-        let mut text = widget::column::with_capacity(3)
+        let one_line =
+            || iced::core::text::Ellipsize::End(iced::core::text::EllipsizeHeightLimit::Lines(1));
+        let mut text = widget::column::with_capacity(4)
             .push(source)
-            .push(widget::text::body(notification.summary.clone()).font(cosmic::font::semibold()));
+            .push(
+                widget::text::body(notification.summary.clone())
+                    .font(cosmic::font::semibold())
+                    .ellipsize(one_line()),
+            );
         if !notification.body.is_empty() {
             text = text.push(widget::text::caption(notification.body.clone()).ellipsize(
                 iced::core::text::Ellipsize::End(iced::core::text::EllipsizeHeightLimit::Lines(3)),
@@ -1439,8 +1475,9 @@ impl App {
             .iter()
             .filter(|(key, label)| key != "default" && !label.is_empty())
             .map(|(key, label)| {
-                button::text(label.clone())
-                    .class(theme::Button::Standard)
+                button::custom(widget::text::caption(label.clone()))
+                    .padding([4, 12])
+                    .class(on_card_class())
                     .on_press(Message::NotificationAction(notification.id, key.clone()))
                     .into()
             })
@@ -1453,13 +1490,34 @@ impl App {
             );
         }
         let key = (notification.id, notification.restored);
+        // On the right: dismiss, and under it how many more of the app's.
+        let mut side = widget::column::with_capacity(2)
+            .push(
+                button::icon(icon("window-close-symbolic"))
+                    .padding(4)
+                    .on_press(Message::DismissNotification(key)),
+            )
+            .spacing(spacing.space_xxs)
+            .align_x(Alignment::End);
+        if let Some((count, app)) = more {
+            side = side.push(
+                button::custom(
+                    widget::row::with_children(vec![
+                        widget::text::caption(format!("+{count}")).into(),
+                        widget::icon::icon(icon("go-down-symbolic")).size(12).into(),
+                    ])
+                    .spacing(2)
+                    .align_y(Alignment::Center),
+                )
+                .padding([2, 8])
+                .class(on_card_class())
+                .on_press(Message::ToggleGroup(app)),
+            );
+        }
         let content = widget::row::with_children(vec![
             widget::icon::icon(app_icon).size(32).into(),
             text.width(Length::Fill).into(),
-            button::icon(icon("window-close-symbolic"))
-                .padding(4)
-                .on_press(Message::DismissNotification(key))
-                .into(),
+            side.into(),
         ])
         .spacing(spacing.space_s);
         button::custom(content)
