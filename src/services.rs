@@ -1258,6 +1258,81 @@ pub fn settings_subscription() -> Subscription<()> {
     })
 }
 
+/// The touchpad, as COSMIC Settings sets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Touchpad {
+    Enabled,
+    Disabled,
+    /// Off while a mouse is plugged in.
+    DisabledOnExternalMouse,
+}
+
+/// cosmic-comp's touchpad settings: the user's, or the system's defaults.
+/// Read and written as text, changing only their `state`, so that the rest
+/// (tapping, scrolling…) stays as it is.
+fn touchpad_files() -> (Option<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    use std::path::PathBuf;
+    const KEY: &str = "com.system76.CosmicComp/v1/input_touchpad";
+    let config = std::env::var_os("HOST_XDG_CONFIG_HOME")
+        .filter(|_| crate::host::in_flatpak())
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").filter(|_| !crate::host::in_flatpak()))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+    let user = config.map(|dir| dir.join("cosmic").join(KEY));
+    let system = ["/usr/share/cosmic", "/run/host/usr/share/cosmic"]
+        .iter()
+        .map(|dir| PathBuf::from(dir).join(KEY))
+        .collect();
+    (user, system)
+}
+
+fn touchpad_text() -> Option<(String, std::path::PathBuf)> {
+    let (user, system) = touchpad_files();
+    let user = user?;
+    let text = std::fs::read_to_string(&user)
+        .ok()
+        .or_else(|| system.iter().find_map(|path| std::fs::read_to_string(path).ok()))?;
+    Some((text, user))
+}
+
+/// Where `state:`'s value is in the settings' text.
+fn state_value(text: &str) -> Option<std::ops::Range<usize>> {
+    let key = text.find("state")?;
+    let colon = key + text[key..].find(':')?;
+    let start = colon + 1 + text[colon + 1..].len() - text[colon + 1..].trim_start().len();
+    let end = start
+        + text[start..]
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(text.len() - start);
+    Some(start..end)
+}
+
+pub fn touchpad() -> Option<Touchpad> {
+    let (text, _) = touchpad_text()?;
+    Some(match &text[state_value(&text)?] {
+        "Disabled" => Touchpad::Disabled,
+        "DisabledOnExternalMouse" => Touchpad::DisabledOnExternalMouse,
+        _ => Touchpad::Enabled,
+    })
+}
+
+pub fn set_touchpad(enabled: bool) {
+    let result = (|| {
+        let (mut text, path) = touchpad_text().ok_or("no touchpad settings")?;
+        let range = state_value(&text).ok_or("no state in the touchpad settings")?;
+        text.replace_range(range, if enabled { "Enabled" } else { "Disabled" });
+        std::fs::create_dir_all(path.parent().ok_or("no directory")?).map_err(|e| e.to_string())?;
+        // Whole, for cosmic-comp, which watches the file.
+        let new = path.with_extension("new");
+        std::fs::write(&new, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&new, &path).map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })();
+    if let Err(err) = result {
+        tracing::warn!("cannot set the touchpad: {err}");
+    }
+}
+
 /// When do not disturb ends by itself, in seconds since the epoch; 0 never.
 pub fn dnd_until() -> Option<i64> {
     Config::new(crate::APP_ID, 1)

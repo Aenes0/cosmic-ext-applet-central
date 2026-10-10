@@ -1,6 +1,7 @@
 # Configurações rápidas para o painel do COSMIC
 
-Applet no estilo da Central de Controle do macOS e das configurações rápidas do GNOME.
+Applet no estilo das configurações rápidas do Android 17, do GNOME e do Windows e da
+Central de Controle do macOS e do iOS.
 No painel ficam, da esquerda para a direita:
 
 - **privacidade**, como no Android e no macOS: uma câmera verde quando um app usa a
@@ -18,26 +19,33 @@ No painel ficam, da esquerda para a direita:
 Passar o mouse sobre cada ícone mostra o que ele diz: a rede, o volume, a bateria com o
 tempo restante, cada bloco ligado. Clicar abre:
 
-- bateria em % (clicar abre a página de Energia), e botões de captura de tela,
-  Configurações, bloquear e desligar (que abre Bloquear, Suspender, Reiniciar, Desligar
-  e Sair);
+- bateria em %, com o tempo que falta quando o sistema sabe (clicar abre a página de
+  Energia), e botões redondos de editar, captura de tela, Configurações, bloquear e
+  desligar (que abre Bloquear, Suspender, Reiniciar, Desligar e Sair, em blocos grandes);
 - quem está usando a câmera ou o microfone, quando alguém está;
-- sliders de volume (o ícone liga/desliga o mudo) e de brilho (o ícone abre a página de
-  Telas do Configurações);
-- blocos de Wi-Fi, Bluetooth, Energia (alterna Economia/Equilibrado/Desempenho),
-  Não perturbe, Tema escuro e Modo avião; dá para adicionar Microfone mudo, Manter
-  acordado, Lado a lado (tiling), Lupa, Inverter cores, Leitor de tela, Alto contraste,
-  Captura de tela e Espaços de trabalho;
+- sliders grossos de volume e de brilho, como no Android e no iOS: o ícone fica dentro,
+  arrasta-se em qualquer ponto, a roda do mouse também muda; o ícone do volume liga e
+  desliga o mudo (o slider fica cinza), e a seta ao lado abre a página;
+- blocos de Wi-Fi, Bluetooth (com a bateria do dispositivo conectado), Energia (alterna
+  Economia/Equilibrado/Desempenho), Não perturbe, Tema escuro e Modo avião; dá para
+  adicionar Microfone mudo, Manter acordado, Lado a lado (tiling), Lupa, Inverter cores,
+  Leitor de tela, Alto contraste, Captura de tela, Espaços de trabalho e Touchpad (liga e
+  desliga o touchpad, sem mexer no resto da configuração dele). Os blocos acendem e apagam
+  aos poucos e cedem um pouco ao serem apertados, como no Android; a seta redonda dentro
+  deles, ou o clique direito em qualquer bloco (o toque longo do Android), abre a página;
+  os pequenos, só com o ícone, dizem o nome ao passar o mouse;
 - a seta do Lado a lado abre a página do tiling, como a do applet oficial: o espaço de
   trabalho atual, o comportamento dos espaços novos (Lado a lado ou Flutuante), os
   atalhos e Realçar janela ativa.
 
-- **o que está tocando** (qualquer player MPRIS: Spotify, navegadores, players de vídeo):
-  capa, título, artista, progresso (arrastável) e anterior/play/próxima; com mais de um
+- **o que está tocando** (qualquer player MPRIS: Spotify, navegadores, players de vídeo),
+  compacto como no macOS e no Android, na cor da capa: capa, título, artista e
+  anterior/play/próxima numa linha, e o progresso (arrastável) embaixo; com mais de um
   player, "1/2 ›" passa para o próximo (um player que começa a tocar vem para a frente); o
   alto-falante escolhe a saída de som ali mesmo;
 - **notificações** recebidas, das mais novas para as mais antigas, as de um mesmo app
-  juntas (só a mais nova, com "+N mais" para ver o resto): clicar abre, os botões do app
+  juntas (só a mais nova, empilhada sobre as outras como no iOS, com "+N mais" para ver o
+  resto): clicar abre, os botões do app
   (como Responder ou Marcar como lida) aparecem no card, "×" dispensa, "Limpar tudo"
   limpa. Elas continuam lá depois de reiniciar a sessão. O applet se apresenta ao painel
   como applet de notificações (`X-NotificationsApplet`) e recebe as notificações do daemon
@@ -53,8 +61,9 @@ o Configurações no rodapé:
 - **Energia**: a bateria do computador e de cada periférico, a opção de mostrar a
   porcentagem da bateria do computador na barra, e os três modos.
 - **Som** (seta do volume): a saída de áudio (as portas sem nada ligado, como HDMI sem
-  monitor, ficam de fora), o volume de cada app que está tocando, e a entrada: volume do
-  microfone e qual microfone usar.
+  monitor, ficam de fora), o volume de cada app que está tocando, como no mixer do Windows
+  (o ícone do app, dentro do slider, o deixa mudo), e a entrada: volume do microfone e qual
+  microfone usar.
 - **Não perturbe**: até você desligar, por 1 hora, por 3 horas ou até amanhã às 8h; o bloco
   mostra até quando.
 - **Telas** (seta do brilho): cada monitor com resolução e taxa, brilho e escala
@@ -62,9 +71,10 @@ o Configurações no rodapé:
   dispositivos `/dev/i2c-*` (por exemplo, uma regra do udev dando acesso ao seu usuário).
 
 As páginas entram deslizando (da direita ao entrar, da esquerda ao voltar), com fade. A
-altura muda de uma vez: redimensionar o popup a cada quadro derrubava o renderizador.
+altura muda de uma vez: redimensionar o popup a cada quadro derrubava o renderizador. O
+popup vai até quase a altura da tela; os controles ficam fixos e só as notificações rolam.
 
-O lápis no rodapé abre a edição, como no Android: os blocos aparecem com "−" para tirar;
+O lápis no topo abre a edição, como no Android: os blocos aparecem com "−" para tirar;
 arraste um bloco para outra posição (os outros abrem espaço enquanto ele passa); tocar
 num bloco o seleciona para mover (Antes/Depois) ou mudar o tamanho (grande, com o nome, ou
 pequeno, só o ícone, metade da largura); embaixo, os blocos que faltam, com "+".

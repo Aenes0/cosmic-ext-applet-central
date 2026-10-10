@@ -12,7 +12,9 @@ use cosmic::{
 };
 
 use crate::{
-    app::{App, Dnd, MAX_HEIGHT, Message, Page},
+    services,
+    widgets::Level,
+    app::{App, Dnd, Message, Page},
     media::Control,
     notifications::Notification,
     i18n::strings,
@@ -21,9 +23,6 @@ use crate::{
         symbolic,
     },
 };
-
-/// The edit button's row at the bottom of the quick settings.
-const FOOTER_HEIGHT: f32 = 36.0;
 
 /// A row of a page: icon, title, maybe a subtitle, maybe something at the end.
 fn item<'a>(
@@ -136,6 +135,136 @@ fn card_class() -> theme::Button {
     }
 }
 
+/// A cover's color made a card's: deep in a dark theme, pale in a light one,
+/// not too loud; and what reads on it.
+fn tint([r, g, b]: [u8; 3], dark: bool) -> (iced::Color, iced::Color) {
+    let (r, g, b) = (f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (max + min) / 2.0;
+    let delta = max - min;
+    let saturation = if delta == 0.0 {
+        0.0
+    } else {
+        delta / (1.0 - (2.0 * lightness - 1.0).abs())
+    };
+    let hue = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        ((g - b) / delta).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
+    } * 60.0;
+    let (saturation, lightness) = if dark {
+        (saturation.min(0.55), 0.24f32)
+    } else {
+        (saturation.min(0.5), 0.86)
+    };
+    // back from hue, saturation and lightness
+    let c = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let x = c * (1.0 - ((hue / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let m = lightness - c / 2.0;
+    let (r, g, b) = match hue as u32 {
+        0..60 => (c, x, 0.0),
+        60..120 => (x, c, 0.0),
+        120..180 => (0.0, c, x),
+        180..240 => (0.0, x, c),
+        240..300 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let background = iced::Color::from_rgb(r + m, g + m, b + m);
+    let foreground = if dark {
+        iced::Color::from_rgb(0.97, 0.97, 0.97)
+    } else {
+        iced::Color::from_rgb(0.08, 0.08, 0.08)
+    };
+    (background, foreground)
+}
+
+/// The progress on a tinted card, in what reads on it.
+fn progress_class(color: [u8; 3]) -> theme::iced::Slider {
+    use iced::widget::slider;
+    let style = move |theme: &cosmic::Theme, handle: f32| {
+        let (_, foreground) = tint(color, theme.cosmic().is_dark);
+        let mut rest = foreground;
+        rest.a = 0.25;
+        slider::Style {
+            rail: slider::Rail {
+                backgrounds: (Background::Color(foreground), Background::Color(rest)),
+                width: 4.0,
+                border: iced::Border {
+                    radius: 2.0.into(),
+                    ..Default::default()
+                },
+            },
+            handle: slider::Handle {
+                shape: slider::HandleShape::Circle { radius: handle },
+                background: Background::Color(foreground),
+                border_width: 0.0,
+                border_color: iced::Color::TRANSPARENT,
+            },
+            breakpoint: slider::Breakpoint { color: foreground },
+        }
+    };
+    theme::iced::Slider::Custom {
+        active: std::rc::Rc::new(move |theme| style(theme, 6.0)),
+        hovered: std::rc::Rc::new(move |theme| style(theme, 8.0)),
+        dragging: std::rc::Rc::new(move |theme| style(theme, 8.0)),
+    }
+}
+
+/// The play button on a tinted card: what reads on the card, the icon in the
+/// card's color.
+fn play_class(color: [u8; 3]) -> theme::Button {
+    let style = move |hovered: bool, theme: &cosmic::Theme| {
+        let (background, mut foreground) = tint(color, theme.cosmic().is_dark);
+        if hovered {
+            foreground.a = 0.85;
+        }
+        button::Style {
+            background: Some(Background::Color(foreground)),
+            border_radius: 20.0.into(),
+            text_color: Some(background),
+            icon_color: Some(background),
+            ..button::Style::new()
+        }
+    };
+    theme::Button::Custom {
+        active: Box::new(move |_, theme| style(false, theme)),
+        disabled: Box::new(move |theme| style(false, theme)),
+        hovered: Box::new(move |_, theme| style(true, theme)),
+        pressed: Box::new(move |_, theme| style(true, theme)),
+    }
+}
+
+/// A round button with an icon, `size` across, like the tiles when off.
+fn circle_button<'a>(icon_name: &str, message: Message, size: f32) -> widget::Button<'a, Message> {
+    let style = move |hovered: bool, theme: &cosmic::Theme| {
+        let component = &theme.cosmic().background(theme.transparent).component;
+        button::Style {
+            background: Some(Background::Color(
+                if hovered { component.hover } else { component.base }.into(),
+            )),
+            border_radius: (size / 2.0).into(),
+            text_color: Some(component.on.into()),
+            icon_color: Some(component.on.into()),
+            ..button::Style::new()
+        }
+    };
+    button::custom(
+        widget::container(widget::icon::icon(icon(icon_name)).size(16)).center(Length::Fixed(size)),
+    )
+    .padding(0)
+    .class(theme::Button::Custom {
+        active: Box::new(move |_, theme| style(false, theme)),
+        disabled: Box::new(move |theme| style(false, theme)),
+        hovered: Box::new(move |_, theme| style(true, theme)),
+        pressed: Box::new(move |_, theme| style(true, theme)),
+    })
+    .on_press(message)
+}
+
 /// The battery pill: lighter when hovered.
 fn pill_class() -> theme::Button {
     let style = |hovered: bool, theme: &cosmic::Theme| {
@@ -169,11 +298,7 @@ impl App {
         more: Option<(&'a str, &'static str)>,
     ) -> Element<'a, Message> {
         let mut header = widget::row::with_capacity(4)
-            .push(
-                button::icon(icon("go-previous-symbolic"))
-                    .padding(8)
-                    .on_press(Message::ShowPage(Page::Main)),
-            )
+            .push(circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), 36.0))
             .push(
                 widget::text::title4(title)
                     .width(Length::Fill),
@@ -398,41 +523,25 @@ impl App {
 
         // Each app's own volume.
         body.push(section(t.apps));
-        let volume_icon = |muted: bool, level: f32| {
-            if muted || level <= 0.0 {
-                "audio-volume-muted-symbolic"
-            } else if level < 0.34 {
-                "audio-volume-low-symbolic"
-            } else if level < 0.67 {
-                "audio-volume-medium-symbolic"
-            } else {
-                "audio-volume-high-symbolic"
-            }
-        };
         match self.mixer.as_ref().map(|m| &m.streams) {
             Some(streams) if !streams.is_empty() => {
+                // As in Windows' mixer: each app's name over its slider, its
+                // icon inside, which mutes it.
                 for (index, stream) in streams.iter().enumerate() {
                     body.push(
                         padded_control(
-                            widget::row::with_children(vec![
-                                widget::icon::icon(app_icon(stream.icon.as_deref())).size(24).into(),
-                                widget::column::with_children(vec![
-                                    widget::text::caption(stream.app.clone()).into(),
-                                    widget::slider(0.0..=100.0, stream.level * 100.0, move |v| {
-                                        Message::SetStreamVolume(index, v)
-                                    })
-                                    .width(Length::Fill)
-                                    .into(),
-                                ])
-                                .width(Length::Fill)
+                            widget::column::with_children(vec![
+                                widget::text::caption(stream.app.clone()).into(),
+                                Level::new(
+                                    widget::icon::icon(app_icon(stream.icon.as_deref())).size(22),
+                                    stream.level,
+                                    move |level| Message::SetStreamVolume(index, level * 100.0),
+                                )
+                                .on_icon_press(Some(Message::ToggleStreamMute(index)))
+                                .dimmed(stream.muted)
                                 .into(),
-                                button::icon(icon(volume_icon(stream.muted, stream.level)))
-                                    .padding(8)
-                                    .on_press(Message::ToggleStreamMute(index))
-                                    .into(),
                             ])
-                            .spacing(spacing.space_s)
-                            .align_y(Alignment::Center),
+                            .spacing(spacing.space_xxs),
                         )
                         .into(),
                     );
@@ -448,21 +557,18 @@ impl App {
             if let Some(input) = &mixer.input {
                 body.push(
                     padded_control(
-                        widget::row::with_children(vec![
-                            button::icon(icon(if input.muted {
+                        Level::new(
+                            widget::icon::icon(icon(if input.muted {
                                 "microphone-sensitivity-muted-symbolic"
                             } else {
                                 "audio-input-microphone-symbolic"
                             }))
-                            .padding(8)
-                            .on_press(Message::ToggleInputMute)
-                            .into(),
-                            widget::slider(0.0..=100.0, input.level * 100.0, Message::SetInputVolume)
-                                .width(Length::Fill)
-                                .into(),
-                        ])
-                        .spacing(spacing.space_xs)
-                        .align_y(Alignment::Center),
+                            .size(20),
+                            input.level,
+                            |level| Message::SetInputVolume(level * 100.0),
+                        )
+                        .on_icon_press(Some(Message::ToggleInputMute))
+                        .dimmed(input.muted),
                     )
                     .into(),
                 );
@@ -527,9 +633,10 @@ impl App {
         ]
         .into_iter()
         .map(|(icon_name, label, message)| {
-            item(icon_name, label.to_owned(), None, None).on_press(message).into()
+            (crate::tiles::tile(icon_name, label, None, false, Some(message), None), 2)
         })
         .collect();
+        let body = vec![padded_control(grid(body, 64.0)).into()];
         self.page(t.session, None, body, None)
     }
 
@@ -587,34 +694,25 @@ impl App {
             }
 
             // Brightness: COSMIC's for the built-in screen, DDC/CI for monitors.
+            let brightness_icon = || widget::icon::icon(icon("display-brightness-symbolic")).size(20);
             let slider: Option<Element<'_, Message>> = if display.internal() {
                 self.brightness.map(|(current, max)| {
-                    widget::slider(0.0..=100.0, current as f32 * 100.0 / max as f32, Message::SetBrightness)
-                        .width(Length::Fill)
-                        .into()
+                    Level::new(brightness_icon(), current as f32 / max.max(1) as f32, |level| {
+                        Message::SetBrightness(level * 100.0)
+                    })
+                    .into()
                 })
             } else {
                 display.ddc.map(|(_, current, max)| {
-                    widget::slider(0.0..=100.0, current as f32 * 100.0 / max.max(1) as f32, move |p| {
-                        Message::SetDdcBrightness(index, p)
+                    Level::new(brightness_icon(), current as f32 / max.max(1) as f32, move |level| {
+                        Message::SetDdcBrightness(index, level * 100.0)
                     })
                     .on_release(Message::ApplyDdcBrightness(index))
-                    .width(Length::Fill)
                     .into()
                 })
             };
             match slider {
-                Some(slider) => body.push(
-                    padded_control(
-                        widget::row::with_children(vec![
-                            widget::icon::icon(icon("display-brightness-symbolic")).size(16).into(),
-                            slider,
-                        ])
-                        .spacing(spacing.space_s)
-                        .align_y(Alignment::Center),
-                    )
-                    .into(),
-                ),
+                Some(slider) => body.push(padded_control(slider).into()),
                 None if !display.internal() => {
                     body.push(padded_control(widget::text::caption(t.no_ddc)).into())
                 }
@@ -726,10 +824,7 @@ impl App {
         let spacing = theme::spacing();
 
         let header = widget::row::with_children(vec![
-            button::icon(icon("go-previous-symbolic"))
-                .padding(8)
-                .on_press(Message::ShowPage(Page::Main))
-                .into(),
+            circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), 36.0).into(),
             widget::text::title4(t.edit_tiles).width(Length::Fill).into(),
             widget::tooltip(
                 button::icon(icon("edit-undo-symbolic"))
@@ -754,8 +849,8 @@ impl App {
                 let state = self.tile_state(placed.tile);
                 let icon_name = state.as_ref().map_or(placed.tile.icon(), |s| s.icon);
                 let mut content = widget::row::with_capacity(2)
-                    .push(widget::icon::icon(icon(icon_name)).size(16))
-                    .spacing(spacing.space_s)
+                    .push(widget::icon::icon(icon(icon_name)).size(20))
+                    .spacing(10)
                     .align_y(Alignment::Center);
                 if !placed.small {
                     content = content.push(
@@ -767,13 +862,13 @@ impl App {
                     );
                 }
                 // Press to drag it, or just click to choose it.
-                let body = widget::mouse_area(
-                    widget::container(content)
-                        .center_y(Length::Fill)
-                        .center_x(Length::Fill)
-                        .padding([0, 10])
-                        .class(edit_container(selected)),
-                )
+                let content = widget::container(content).center_y(Length::Fill);
+                let content = if placed.small {
+                    content.center_x(Length::Fill)
+                } else {
+                    content.width(Length::Fill).padding([0, 14])
+                };
+                let body = widget::mouse_area(content.class(edit_container(selected)))
                 .on_press(Message::DragStart(index))
                 .on_enter(Message::DragOver(index))
                 .interaction(if self.drag.is_some() {
@@ -791,7 +886,7 @@ impl App {
                 (tile, placed.columns())
             })
             .collect();
-        let shown = widget::container(grid(items, 56.0))
+        let shown = widget::container(grid(items, 64.0))
             .padding(spacing.space_xs)
             .class(theme::Container::custom(|theme| {
                 let cosmic = theme.cosmic();
@@ -929,19 +1024,6 @@ impl App {
 
     pub fn main_page(&self) -> Element<'_, Message> {
         let spacing = theme::spacing();
-        let footer = widget::row::with_children(vec![
-            widget::space::horizontal().into(),
-            widget::tooltip(
-                button::icon(icon("document-edit-symbolic"))
-                    .padding(8)
-                    .on_press(Message::ShowPage(Page::Edit)),
-                widget::text::body(strings().edit),
-                widget::tooltip::Position::Top,
-            )
-            .into(),
-        ])
-        .height(Length::Fixed(FOOTER_HEIGHT))
-        .align_y(Alignment::Center);
         let mut sections = vec![self.header()];
         sections.extend(self.privacy_banner());
         sections.extend([self.sliders(), self.tiles()]);
@@ -949,12 +1031,10 @@ impl App {
         // Last, so that it gets what the controls leave: the controls stay
         // put and only the notifications scroll.
         sections.extend(self.notifications_list());
-        let (top, bottom) = (f32::from(spacing.space_s), f32::from(spacing.space_xxs));
-        let body = widget::container(widget::column::with_children(sections).spacing(spacing.space_s))
-            .max_height(MAX_HEIGHT - top - bottom - FOOTER_HEIGHT - f32::from(spacing.space_s));
-        widget::column::with_children(vec![body.into(), footer.into()])
-            .spacing(spacing.space_s)
-            .padding([spacing.space_s, spacing.space_s, spacing.space_xxs, spacing.space_s])
+        let padding = f32::from(spacing.space_s);
+        widget::container(widget::column::with_children(sections).spacing(spacing.space_s))
+            .max_height(self.max_height() - 2.0 * padding)
+            .padding(spacing.space_s)
             .into()
     }
 
@@ -1009,7 +1089,7 @@ impl App {
                 .width(Length::Fixed(56.0))
                 .height(Length::Fixed(56.0))
                 .content_fit(iced::ContentFit::Cover)
-                .border_radius(8.0)
+                .border_radius(12.0)
                 .into(),
             None => widget::container(widget::icon::icon(icon("audio-x-generic-symbolic")).size(28))
                 .center(Length::Fixed(56.0))
@@ -1018,26 +1098,27 @@ impl App {
                         theme.cosmic().background(theme.transparent).component.hover.into(),
                     )),
                     border: iced::Border {
-                        radius: 8.0.into(),
+                        radius: 12.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
                 }))
                 .into(),
         };
+        let color = media.color;
         let one_line = || {
             iced::core::text::Ellipsize::End(iced::core::text::EllipsizeHeightLimit::Lines(1))
+        };
+        let byline = match media.artist.is_empty() {
+            true => media.player.clone(),
+            false => format!("{} · {}", media.artist, media.player),
         };
         let about = widget::column::with_children(vec![
             widget::text::body(media.title.clone())
                 .font(cosmic::font::semibold())
                 .ellipsize(one_line())
                 .into(),
-            widget::text::caption(media.artist.clone()).ellipsize(one_line()).into(),
-            widget::text::caption(media.player.clone())
-                .class(theme::Text::Custom(dimmed))
-                .ellipsize(one_line())
-                .into(),
+            widget::text::caption(byline).ellipsize(one_line()).into(),
         ])
         .width(Length::Fill);
 
@@ -1049,13 +1130,19 @@ impl App {
         };
         let progress = widget::row::with_children(vec![
             widget::text::caption(time(position)).into(),
-            widget::slider(0.0..=length, position.min(length), Message::Seek)
-                .on_release(Message::SeekDone)
-                .width(Length::Fill)
-                .into(),
+            {
+                let slider = widget::slider(0.0..=length, position.min(length), Message::Seek)
+                    .on_release(Message::SeekDone)
+                    .width(Length::Fill);
+                match color {
+                    Some(color) => slider.class(progress_class(color)).into(),
+                    None => slider.into(),
+                }
+            },
             widget::text::caption(time(length)).into(),
         ])
         .spacing(spacing.space_xs)
+        .width(Length::Fill)
         .align_y(Alignment::Center);
 
         let control = |icon_name: &str, message: Option<Message>, size: u16| -> Element<'_, Message> {
@@ -1076,7 +1163,10 @@ impl App {
             )
             .center(Length::Fixed(40.0)),
         )
-        .class(chip_class(true))
+        .class(match color {
+            Some(color) => play_class(color),
+            None => chip_class(true),
+        })
         .on_press(Message::MediaControl(Control::PlayPause));
         // The players, when more than one: the next one, round.
         let switcher: Element<'_, Message> = if self.media.len() > 1 {
@@ -1103,43 +1193,44 @@ impl App {
             )
             .into()
         } else {
-            widget::space::horizontal().width(Length::Fixed(36.0)).into()
+            widget::space::horizontal().width(Length::Fixed(0.0)).into()
         };
         let outputs = button::icon(icon("audio-speakers-symbolic"))
-            .padding(8)
+            .padding(6)
             .selected(self.media_outputs)
             .on_press(Message::ToggleMediaOutputs);
-        let controls = widget::row::with_children(vec![
-            outputs.into(),
-            widget::space::horizontal().into(),
+        // As the players in macOS and Android: what's playing and its buttons
+        // in a row, the progress under them.
+        let top = widget::row::with_children(vec![
+            cover,
+            about.into(),
             control(
                 "media-skip-backward-symbolic",
                 media.can_previous.then_some(Message::MediaControl(Control::Previous)),
-                20,
+                18,
             ),
             play.into(),
             control(
                 "media-skip-forward-symbolic",
                 media.can_next.then_some(Message::MediaControl(Control::Next)),
-                20,
+                18,
             ),
-            widget::space::horizontal().into(),
-            switcher,
         ])
-        .spacing(spacing.space_m)
+        .spacing(spacing.space_xs)
         .align_y(Alignment::Center);
-
+        let mut bottom = widget::row::with_capacity(4)
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center);
+        bottom = if media.length > 0 {
+            bottom.push(progress)
+        } else {
+            bottom.push(widget::space::horizontal())
+        };
+        let bottom = bottom.push(outputs).push(switcher);
         let mut card = widget::column::with_capacity(3)
-            .push(
-                widget::row::with_children(vec![cover, about.into()])
-                    .spacing(spacing.space_s)
-                    .align_y(Alignment::Center),
-            )
+            .push(top)
+            .push(bottom)
             .spacing(spacing.space_xs);
-        if media.length > 0 {
-            card = card.push(progress);
-        }
-        card = card.push(controls);
         // Where the sound goes, picked right here.
         if self.media_outputs {
             if let Some((sinks, default)) = &self.sinks {
@@ -1156,7 +1247,27 @@ impl App {
                 }
             }
         }
-        Some(card_container(card).into())
+        Some(match color {
+            // In the cover's colors, as phones show what's playing.
+            Some(color) => widget::container(card)
+                .padding(14)
+                .width(Length::Fill)
+                .class(theme::Container::custom(move |theme| {
+                    let (background, foreground) = tint(color, theme.cosmic().is_dark);
+                    widget::container::Style {
+                        background: Some(Background::Color(background)),
+                        text_color: Some(foreground),
+                        icon_color: Some(foreground),
+                        border: iced::Border {
+                            radius: theme.cosmic().radius_l().into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                }))
+                .into(),
+            None => card_container(card).into(),
+        })
     }
 
     /// The notifications received, newest first, with a way to clear them.
@@ -1168,9 +1279,18 @@ impl App {
         let spacing = theme::spacing();
         let header = widget::row::with_children(vec![
             widget::text::heading(t.notifications).width(Length::Fill).into(),
-            button::text(t.clear_all)
-                .on_press(Message::ClearNotifications)
-                .into(),
+            button::custom(
+                widget::row::with_children(vec![
+                    widget::icon::icon(icon("edit-clear-all-symbolic")).size(16).into(),
+                    widget::text::caption(t.clear_all).into(),
+                ])
+                .spacing(spacing.space_xxs)
+                .align_y(Alignment::Center),
+            )
+            .padding([6, 12])
+            .class(pill_class())
+            .on_press(Message::ClearNotifications)
+            .into(),
         ])
         .align_y(Alignment::Center);
 
@@ -1186,9 +1306,44 @@ impl App {
         let mut cards: Vec<Element<'_, Message>> = Vec::new();
         for (app, group) in groups {
             let expanded = self.expanded.contains(app);
-            let shown = if expanded { group.len() } else { 1 };
-            for notification in &group[..shown] {
-                cards.push(self.notification_card(notification));
+            if expanded || group.len() == 1 {
+                for notification in &group {
+                    cards.push(self.notification_card(notification));
+                }
+            } else {
+                // The rest of a group, stacked under its newest, as phones do.
+                let edge = |inset: f32, alpha: f32| -> Element<'_, Message> {
+                    widget::container(
+                        widget::container(widget::space::vertical().height(Length::Fixed(6.0)))
+                            .width(Length::Fill)
+                            .class(theme::Container::custom(move |theme| {
+                                let mut color: iced::Color = theme
+                                    .cosmic()
+                                    .background(theme.transparent)
+                                    .component
+                                    .base
+                                    .into();
+                                color.a *= alpha;
+                                widget::container::Style {
+                                    background: Some(Background::Color(color)),
+                                    border: iced::Border {
+                                        radius: [0.0, 0.0, 10.0, 10.0].into(),
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                }
+                            })),
+                    )
+                    .padding([0.0, inset])
+                    .into()
+                };
+                let mut stack = widget::column::with_capacity(3)
+                    .push(self.notification_card(group[0]))
+                    .push(edge(10.0, 0.7));
+                if group.len() > 2 {
+                    stack = stack.push(edge(22.0, 0.4));
+                }
+                cards.push(stack.into());
             }
             if group.len() > 1 {
                 let label = if expanded {
@@ -1245,11 +1400,13 @@ impl App {
             3600..86400 => format!("{} h", elapsed / 3600),
             _ => format!("{} d", elapsed / 86400),
         };
+        let source_text = if notification.app.is_empty() {
+            ago
+        } else {
+            format!("{} · {ago}", notification.app)
+        };
         let mut source = widget::row::with_capacity(2)
-            .push(
-                widget::text::caption(format!("{} · {ago}", notification.app))
-                    .class(theme::Text::Custom(dimmed)),
-            )
+            .push(widget::text::caption(source_text).class(theme::Text::Custom(dimmed)))
             .spacing(spacing.space_xxs)
             .align_y(Alignment::Center);
         // New since the popup was last open: an accent dot.
@@ -1319,17 +1476,21 @@ impl App {
             .spacing(theme::spacing().space_xs)
             .align_y(Alignment::Center);
         if let Some(battery) = &self.battery {
-            // A way to the batteries and power modes.
+            // A way to the batteries and power modes, with how long it lasts.
+            let mut label = format!("{:.0} %", battery.percentage);
+            if let Some(left) = battery.time_left {
+                label.push_str(&format!(" · {}", crate::app::duration(left)));
+            }
             row = row.push(
                 button::custom(
                     widget::row::with_children(vec![
                         widget::icon::icon(icon(&symbolic(&battery.icon))).size(16).into(),
-                        widget::text::body(format!("{:.0} %", battery.percentage)).into(),
+                        widget::text::body(label).into(),
                     ])
                     .spacing(theme::spacing().space_xxs)
                     .align_y(Alignment::Center),
                 )
-                .padding([8, 14])
+                .padding([10, 14])
                 .class(pill_class())
                 .on_press(Message::ShowPage(Page::Power)),
             );
@@ -1337,56 +1498,52 @@ impl App {
         row = row.push(widget::space::horizontal());
         let action = |icon_name: &'static str, tooltip: &'static str, message| {
             widget::tooltip(
-                button::icon(icon(icon_name))
-                    .padding(10)
-                    .class(theme::Button::Standard)
-                    .on_press(message),
+                circle_button(icon_name, message, 36.0),
                 widget::text::body(tooltip),
                 widget::tooltip::Position::Bottom,
             )
         };
-        row.push(action("accessories-screenshot-symbolic", t.screenshot, Message::Screenshot))
+        row.push(action("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)))
+            .push(action("accessories-screenshot-symbolic", t.screenshot, Message::Screenshot))
             .push(action("emblem-system-symbolic", t.settings, Message::Settings(None)))
             .push(action("system-lock-screen-symbolic", t.lock, Message::Lock))
             .push(action("system-shutdown-symbolic", t.session, Message::ShowPage(Page::Session)))
             .into()
     }
 
+    /// Volume and brightness, thick, as phones have them, each with a round
+    /// arrow to its page.
     fn sliders(&self) -> Element<'_, Message> {
-        let mut column = widget::column::with_capacity(2).spacing(theme::spacing().space_xxs);
-        let slider_row = |icon_name: &'static str,
-                          press: Message,
-                          value: f32,
-                          change: fn(f32) -> Message,
-                          more: Message| {
+        let spacing = theme::spacing();
+        let mut column = widget::column::with_capacity(2).spacing(spacing.space_xs);
+        let slider_row = |level: Level<'static, Message>, more: Message| {
             widget::row::with_children(vec![
-                button::icon(icon(icon_name)).padding(8).on_press(press).into(),
-                widget::slider(0.0..=100.0, value, change)
-                    .width(Length::Fill)
-                    .into(),
-                button::icon(icon("go-next-symbolic"))
-                    .padding(8)
-                    .on_press(more)
-                    .into(),
+                level.into(),
+                circle_button("go-next-symbolic", more, 44.0).into(),
             ])
-            .spacing(theme::spacing().space_xs)
+            .spacing(spacing.space_xs)
             .align_y(Alignment::Center)
         };
         if let Some(volume) = &self.volume {
             column = column.push(slider_row(
-                self.volume_icon(),
-                Message::ToggleMute,
-                volume.level * 100.0,
-                Message::SetVolume,
+                // the icon mutes
+                Level::new(
+                    widget::icon::icon(icon(self.volume_icon())).size(20),
+                    volume.level,
+                    |level| Message::SetVolume(level * 100.0),
+                )
+                .on_icon_press(Some(Message::ToggleMute))
+                .dimmed(volume.muted),
                 Message::ShowPage(Page::Sound),
             ));
         }
         if let Some((current, max)) = self.brightness {
             column = column.push(slider_row(
-                "display-brightness-symbolic",
-                Message::Settings(Some("displays")),
-                current as f32 * 100.0 / max as f32,
-                Message::SetBrightness,
+                Level::new(
+                    widget::icon::icon(icon("display-brightness-symbolic")).size(20),
+                    current as f32 / max.max(1) as f32,
+                    |level| Message::SetBrightness(level * 100.0),
+                ),
                 Message::ShowPage(Page::Displays),
             ));
         }
@@ -1436,7 +1593,26 @@ impl App {
                 let subtitle = match self.bluetooth.connected.as_slice() {
                     [] if self.bluetooth.powered => t.on.to_owned(),
                     [] => t.off.to_owned(),
-                    [one] => one.clone(),
+                    // with its battery, as phones show it
+                    [one] => {
+                        let battery = self
+                            .bluetooth
+                            .devices
+                            .iter()
+                            .find(|d| d.connected && &d.name == one)
+                            .and_then(|d| d.battery)
+                            .map(f64::from)
+                            .or_else(|| {
+                                self.peripherals
+                                    .iter()
+                                    .find(|p| &p.name == one)
+                                    .map(|p| p.percentage)
+                            });
+                        match battery {
+                            Some(battery) => format!("{one} · {battery:.0} %"),
+                            None => one.clone(),
+                        }
+                    }
                     many => format!("{} {}", many.len(), t.devices),
                 };
                 TileState::new(
@@ -1574,6 +1750,22 @@ impl App {
                 Some(Message::OpenWorkspaces),
                 None,
             ),
+            Tile::Touchpad => {
+                let touchpad = self.touchpad?;
+                TileState::new(
+                    if touchpad == services::Touchpad::Disabled {
+                        "touchpad-disabled-symbolic"
+                    } else {
+                        tile.icon()
+                    },
+                    t.touchpad,
+                    (touchpad == services::Touchpad::DisabledOnExternalMouse)
+                        .then(|| t.off_with_mouse.to_owned()),
+                    touchpad != services::Touchpad::Disabled,
+                    Some(Message::ToggleTouchpad),
+                    None,
+                )
+            }
         })
     }
 
@@ -1587,7 +1779,7 @@ impl App {
                 Some((element, placed.columns()))
             })
             .collect();
-        grid(items, 56.0)
+        grid(items, 64.0)
     }
 }
 

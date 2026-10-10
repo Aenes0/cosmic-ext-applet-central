@@ -29,6 +29,8 @@ pub struct Media {
     pub artist: String,
     /// The cover, saved locally.
     pub art: Option<PathBuf>,
+    /// The cover's color, to tint the card with.
+    pub color: Option<[u8; 3]>,
     pub playing: bool,
     pub track: Option<OwnedObjectPath>,
     /// Microseconds.
@@ -151,11 +153,46 @@ async fn cover(url: &str) -> Option<PathBuf> {
     }
 }
 
+/// A cover's color: its pixels averaged, the more colorful counting more,
+/// as phones tint their players. Kept next to the cover, once worked out.
+async fn cover_color(path: &std::path::Path) -> Option<[u8; 3]> {
+    let kept = path.with_extension("rgb");
+    if let Ok(bytes) = tokio::fs::read(&kept).await
+        && let [r, g, b] = bytes[..]
+    {
+        return Some([r, g, b]);
+    }
+    let path = path.to_owned();
+    let color = tokio::task::spawn_blocking(move || {
+        let image = image::open(&path).ok()?.thumbnail(24, 24).to_rgb8();
+        let (mut sum, mut weights) = ([0.0f32; 3], 0.0f32);
+        for pixel in image.pixels() {
+            let [r, g, b] = pixel.0.map(f32::from);
+            let saturation = (r.max(g).max(b) - r.min(g).min(b)) / 255.0;
+            let weight = 0.05 + saturation * saturation;
+            sum = [sum[0] + r * weight, sum[1] + g * weight, sum[2] + b * weight];
+            weights += weight;
+        }
+        (weights > 0.0).then(|| sum.map(|channel| (channel / weights).round() as u8))
+    })
+    .await
+    .ok()??;
+    // only for our own copies, in the cache
+    if kept.starts_with(std::env::temp_dir()) || kept.to_string_lossy().contains(crate::APP_ID) {
+        _ = tokio::fs::write(&kept, color).await;
+    }
+    Some(color)
+}
+
 async fn read(conn: &zbus::Connection, service: &str) -> zbus::Result<Media> {
     let proxy = player(conn, service).await?;
     let metadata = proxy.metadata().await.unwrap_or_default();
     let art = match text(&metadata, "mpris:artUrl") {
         Some(url) => cover(&url).await,
+        None => None,
+    };
+    let color = match &art {
+        Some(path) => cover_color(path).await,
         None => None,
     };
     let identity = MediaPlayerProxy::builder(conn)
@@ -171,6 +208,7 @@ async fn read(conn: &zbus::Connection, service: &str) -> zbus::Result<Media> {
         title: text(&metadata, "xesam:title").unwrap_or_default(),
         artist: text(&metadata, "xesam:artist").unwrap_or_default(),
         art,
+        color,
         playing: proxy.playback_status().await? == "Playing",
         track: metadata
             .get("mpris:trackid")

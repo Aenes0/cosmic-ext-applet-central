@@ -29,8 +29,11 @@ use crate::{
 };
 
 const WIDTH: f32 = 420.0;
-/// The popup grows with what it shows up to this; past it the notifications scroll.
+/// The popup grows with what it shows up to this, until the screen's height
+/// is known; past it the notifications scroll.
 pub const MAX_HEIGHT: f32 = 800.0;
+/// Of the screen, left out of the popup's height: the panel and some air.
+const SCREEN_MARGIN: f32 = 96.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -44,6 +47,24 @@ pub enum Page {
     Tiling,
     DoNotDisturb,
     Session,
+}
+
+impl Page {
+    pub fn from_name(name: &str) -> Option<Page> {
+        Some(match name {
+            "main" => Page::Main,
+            "edit" => Page::Edit,
+            "wifi" => Page::Wifi,
+            "bluetooth" => Page::Bluetooth,
+            "power" => Page::Power,
+            "sound" => Page::Sound,
+            "displays" => Page::Displays,
+            "tiling" => Page::Tiling,
+            "dnd" => Page::DoNotDisturb,
+            "session" => Page::Session,
+            _ => return None,
+        })
+    }
 }
 
 /// How long do not disturb lasts.
@@ -64,6 +85,8 @@ pub type NotificationKey = (u32, bool);
 #[derive(Clone, Debug)]
 pub enum Message {
     TogglePopup,
+    /// Opens the popup on a page by itself, for screenshots.
+    Preview(Page),
     Closed(window::Id),
     ShowPage(Page),
     Update(Update),
@@ -79,6 +102,9 @@ pub enum Message {
     ToggleAirplaneMode,
     ToggleMicrophone,
     ToggleKeepAwake,
+    ToggleTouchpad,
+    /// A screen's name and height.
+    Output(Option<String>, Option<i32>),
     ToggleShowPercentage,
     ToggleShowActive,
     SettingsChanged,
@@ -215,6 +241,9 @@ pub struct App {
     pub(crate) show_active: bool,
     /// Held while keeping the computer awake.
     pub(crate) inhibit: Option<u32>,
+    pub(crate) touchpad: Option<services::Touchpad>,
+    /// The height of the screen the panel is on, in logical pixels.
+    screen_height: Option<i32>,
 }
 
 impl App {
@@ -267,6 +296,12 @@ impl App {
 
     pub(crate) fn new_count(&self) -> usize {
         self.notifications.iter().filter(|n| self.is_new(n)).count()
+    }
+
+    /// How tall the popup can be: as the screen allows.
+    pub fn max_height(&self) -> f32 {
+        self.screen_height
+            .map_or(MAX_HEIGHT, |height| (height as f32 - SCREEN_MARGIN).clamp(480.0, 1200.0))
     }
 
     fn close_popup(&mut self) -> app::Task<Message> {
@@ -377,12 +412,12 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
     })
 }
 
-fn popup_limits() -> Limits {
+fn popup_limits(max_height: f32) -> Limits {
     Limits::NONE
         .min_width(WIDTH)
         .max_width(WIDTH)
         .min_height(1.0)
-        .max_height(MAX_HEIGHT)
+        .max_height(max_height)
 }
 
 impl cosmic::Application for App {
@@ -405,9 +440,22 @@ impl cosmic::Application for App {
             show_active: !HIDE_ACTIVE.get(),
             notifications: notifications::load(),
             dnd_until: services::dnd_until(),
+            touchpad: services::touchpad(),
             ..Self::default()
         };
-        (app, Task::none())
+        // COSMIC_QS_PREVIEW=sound opens the popup on that page by itself, to
+        // take screenshots without clicking the panel.
+        let preview = std::env::var("COSMIC_QS_PREVIEW")
+            .ok()
+            .and_then(|name| Page::from_name(&name));
+        let task = match preview {
+            Some(page) => Task::future(async move {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                cosmic::action::app(Message::Preview(page))
+            }),
+            None => Task::none(),
+        };
+        (app, task)
     }
 
     fn core(&self) -> &app::Core {
@@ -441,11 +489,16 @@ impl cosmic::Application for App {
                             app.core
                                 .applet
                                 .get_popup_settings(parent, id, None, None, None);
-                        settings.positioner.size_limits = popup_limits();
+                        settings.positioner.size_limits = popup_limits(app.max_height());
                         settings
                     },
                     None,
                 ));
+            }
+            Message::Preview(page) => {
+                let open = self.update(Message::TogglePopup);
+                self.page = Some(page);
+                return Task::batch([open, self.load(page)]);
             }
             Message::Closed(id) => {
                 if self.popup == Some(id) {
@@ -625,6 +678,25 @@ impl cosmic::Application for App {
                 }
                 return Task::batch(tasks);
             }
+            Message::Output(name, height) => {
+                tracing::debug!("output {name:?}: {height:?}");
+                let panel = std::env::var("COSMIC_PANEL_OUTPUT").unwrap_or_default();
+                // the panel's screen, or any if it's on all of them
+                if name.as_deref() == Some(panel.as_str())
+                    || (panel.is_empty() || panel == "all") && self.screen_height.is_none()
+                {
+                    self.screen_height = height;
+                }
+            }
+            Message::ToggleTouchpad => {
+                let enabled = self.touchpad != Some(services::Touchpad::Enabled);
+                self.touchpad = Some(if enabled {
+                    services::Touchpad::Enabled
+                } else {
+                    services::Touchpad::Disabled
+                });
+                services::set_touchpad(enabled);
+            }
             Message::ToggleKeepAwake => {
                 return match self.inhibit.take() {
                     Some(cookie) => run("allow idling", services::allow_idle(cookie)),
@@ -647,6 +719,7 @@ impl cosmic::Application for App {
                 }
                 self.dark_mode = DARK_MODE.get();
                 self.tiling_config = services::tiling_config();
+                self.touchpad = services::touchpad();
             }
             Message::ToggleShowActive => {
                 self.show_active = !self.show_active;
@@ -1071,6 +1144,19 @@ impl cosmic::Application for App {
             audio::privacy_subscription().map(Message::Privacy),
             notifications::subscription().map(Message::Notification),
         ];
+        // The screen's size, for the popup's height.
+        subscriptions.push(event::listen_with(|event, _, _| {
+            use iced::event::wayland::{Event as Wayland, OutputEvent};
+            match event {
+                iced::Event::PlatformSpecific(iced::event::PlatformSpecific::Wayland(
+                    Wayland::Output(
+                        OutputEvent::Created(Some(info)) | OutputEvent::InfoUpdate(info),
+                        _,
+                    ),
+                )) => Some(Message::Output(info.name.clone(), info.logical_size.map(|(_, h)| h))),
+                _ => None,
+            }
+        }));
         if self.drag.is_some() {
             // Let go anywhere, on a tile or not.
             subscriptions.push(event::listen_with(|event, _, _| match event {
@@ -1260,7 +1346,7 @@ impl cosmic::Application for App {
         self.core
             .applet
             .popup_container(Transition::new(page as u64, depth, content))
-            .limits(popup_limits())
+            .limits(popup_limits(self.max_height()))
             .into()
     }
 

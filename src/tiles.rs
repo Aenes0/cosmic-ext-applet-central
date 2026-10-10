@@ -9,7 +9,11 @@ use cosmic::{
     widget::{self, button},
 };
 
-use crate::{app::Message, i18n::strings};
+use crate::{
+    app::Message,
+    i18n::strings,
+    widgets::{Surface, tile_radius},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tile {
@@ -28,10 +32,11 @@ pub enum Tile {
     HighContrast,
     Screenshot,
     Workspaces,
+    Touchpad,
 }
 
 impl Tile {
-    pub const ALL: [Tile; 15] = [
+    pub const ALL: [Tile; 16] = [
         Tile::Wifi,
         Tile::Bluetooth,
         Tile::Power,
@@ -47,6 +52,7 @@ impl Tile {
         Tile::HighContrast,
         Tile::Screenshot,
         Tile::Workspaces,
+        Tile::Touchpad,
     ];
 
     pub const DEFAULT: [Tile; 6] = [
@@ -76,6 +82,7 @@ impl Tile {
             Tile::HighContrast => "high-contrast",
             Tile::Screenshot => "screenshot",
             Tile::Workspaces => "workspaces",
+            Tile::Touchpad => "touchpad",
         }
     }
 
@@ -101,6 +108,7 @@ impl Tile {
             Tile::HighContrast => t.high_contrast,
             Tile::Screenshot => t.screenshot,
             Tile::Workspaces => t.workspaces,
+            Tile::Touchpad => t.touchpad,
         }
     }
 
@@ -121,6 +129,7 @@ impl Tile {
             Tile::HighContrast => "color-select-symbolic",
             Tile::Screenshot => "accessories-screenshot-symbolic",
             Tile::Workspaces => "view-app-grid-symbolic",
+            Tile::Touchpad => "input-touchpad-symbolic",
         }
     }
 }
@@ -192,14 +201,25 @@ impl TileState {
         tile(self.icon, self.title, self.subtitle, self.on, self.toggle, self.details)
     }
 
-    /// Only the icon: a click toggles, the page is out of reach.
+    /// Only the icon: a click toggles, a right click opens its page; the
+    /// name shows on hover.
     pub fn small<'a>(self) -> Element<'a, Message> {
-        button::custom(widget::container(widget::icon::icon(icon(self.icon)).size(18)).center(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .class(tile_class(self.on, Part::Whole))
-            .on_press_maybe(self.toggle)
-            .into()
+        let name = match self.subtitle {
+            Some(subtitle) => format!("{} · {subtitle}", self.title),
+            None => self.title.to_owned(),
+        };
+        widget::tooltip(
+            Surface::new(
+                widget::container(widget::icon::icon(icon(self.icon)).size(20))
+                    .center(Length::Fill),
+                self.on,
+            )
+            .on_press(self.toggle)
+            .on_right_press(self.details),
+            widget::text::body(name),
+            widget::tooltip::Position::Bottom,
+        )
+        .into()
     }
 }
 
@@ -250,7 +270,7 @@ pub fn badge<'a>(icon_name: &str, message: Message) -> Element<'a, Message> {
     button::custom(widget::container(widget::icon::icon(icon(icon_name)).size(12)).center(Length::Fill))
         .width(Length::Fixed(22.0))
         .height(Length::Fixed(22.0))
-        .class(tile_class(true, Part::Whole))
+        .class(tile_class(true))
         .on_press(message)
         .into()
 }
@@ -267,7 +287,7 @@ pub fn edit_container(selected: bool) -> theme::Container<'static> {
             text_color: Some(component.on.into()),
             icon_color: Some(component.on.into()),
             border: cosmic::iced::Border {
-                radius: cosmic.radius_xl().into(),
+                radius: tile_radius(theme).into(),
                 width: if selected { 2.0 } else { 0.0 },
                 color: cosmic.accent_color().into(),
             },
@@ -285,7 +305,7 @@ pub fn edit_class(selected: bool) -> theme::Button {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),
             )),
-            border_radius: cosmic.radius_xl().into(),
+            border_radius: (tile_radius(theme) * 0.8).into(),
             border_width: if selected { 2.0 } else { 0.0 },
             border_color: cosmic.accent_color().into(),
             text_color: Some(component.on.into()),
@@ -348,14 +368,8 @@ pub fn symbolic(name: &str) -> String {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Part {
-    Whole,
-    Main,
-    Arrow,
-}
-
-/// A quick setting, lit when on, maybe with an arrow to more of it.
+/// A quick setting, lit when on, maybe with a round arrow inside to more of
+/// it (a right click anywhere goes there too).
 pub fn tile<'a>(
     icon_name: &str,
     title: &'a str,
@@ -364,55 +378,71 @@ pub fn tile<'a>(
     toggle: Option<Message>,
     details: Option<Message>,
 ) -> Element<'a, Message> {
+    let one_line =
+        || iced::core::text::Ellipsize::End(iced::core::text::EllipsizeHeightLimit::Lines(1));
     let mut text = widget::column::with_capacity(2).push(
         widget::text::body(title)
             .font(cosmic::font::semibold())
-            .ellipsize(iced::core::text::Ellipsize::End(
-                iced::core::text::EllipsizeHeightLimit::Lines(1),
-            )),
+            .ellipsize(one_line()),
     );
     if let Some(subtitle) = subtitle {
-        text = text.push(widget::text::caption(subtitle).ellipsize(
-            iced::core::text::Ellipsize::End(iced::core::text::EllipsizeHeightLimit::Lines(1)),
-        ));
+        text = text.push(widget::text::caption(subtitle).ellipsize(one_line()));
     }
-    let content = widget::row::with_children(vec![
-        widget::icon::icon(icon(icon_name)).size(16).into(),
-        text.into(),
-    ])
-    .spacing(theme::spacing().space_s)
-    .align_y(Alignment::Center);
-
-    let part = if details.is_some() { Part::Main } else { Part::Whole };
-    let main = button::custom(widget::container(content).center_y(Length::Fill))
-        .padding([0, 12])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .class(tile_class(on, part))
-        .on_press_maybe(toggle);
-    let Some(details) = details else {
-        return main.into();
-    };
-    let arrow = button::custom(
-        widget::container(widget::icon::icon(icon("go-next-symbolic")).size(16))
-            .center(Length::Fill),
-    )
-    .width(Length::Fixed(36.0))
-    .height(Length::Fill)
-    .class(tile_class(on, Part::Arrow))
-    .on_press(details);
-    widget::row::with_children(vec![main.into(), arrow.into()])
-        .spacing(1)
-        .width(Length::Fill)
+    let mut content = widget::row::with_capacity(3)
+        .push(widget::icon::icon(icon(icon_name)).size(20))
+        .push(text.width(Length::Fill))
+        .spacing(10)
+        .align_y(Alignment::Center);
+    if let Some(details) = &details {
+        content = content.push(
+            button::custom(
+                widget::container(widget::icon::icon(icon("go-next-symbolic")).size(16))
+                    .center(Length::Fixed(30.0)),
+            )
+            .padding(0)
+            .class(arrow_class(on))
+            .on_press(details.clone()),
+        );
+    }
+    let right = if details.is_some() { 8 } else { 14 };
+    Surface::new(widget::container(content).center_y(Length::Fill), on)
+        .padding([0, right, 0, 14])
+        .on_press(toggle)
+        .on_right_press(details)
         .into()
+}
+
+/// The round arrow inside a tile: a shade of what's on the tile, over it.
+fn arrow_class(on: bool) -> theme::Button {
+    let style = move |hovered: bool, theme: &cosmic::Theme| {
+        let cosmic = theme.cosmic();
+        let mut shade: iced::Color = if on {
+            cosmic.accent_button.on
+        } else {
+            cosmic.background(theme.transparent).component.on
+        }
+        .into();
+        shade.a = if hovered { 0.2 } else { 0.1 };
+        button::Style {
+            background: Some(Background::Color(shade)),
+            border_radius: 16.0.into(),
+            ..button::Style::new()
+        }
+    };
+    theme::Button::Custom {
+        active: Box::new(move |_, theme| style(false, theme)),
+        disabled: Box::new(move |theme| style(false, theme)),
+        hovered: Box::new(move |_, theme| style(true, theme)),
+        pressed: Box::new(move |_, theme| style(true, theme)),
+    }
 }
 
 /// A small choice among a few, lit when chosen.
 pub fn chip_class(on: bool) -> theme::Button {
-    tile_class(on, Part::Whole)
+    tile_class(on)
 }
 
-fn tile_class(on: bool, part: Part) -> theme::Button {
+fn tile_class(on: bool) -> theme::Button {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
         let component = if on {
@@ -420,12 +450,7 @@ fn tile_class(on: bool, part: Part) -> theme::Button {
         } else {
             &cosmic.background(theme.transparent).component
         };
-        let r = cosmic.radius_xl()[0];
-        let radius = match part {
-            Part::Whole => Radius::from(r),
-            Part::Main => Radius::from([r, 0.0, 0.0, r]),
-            Part::Arrow => Radius::from([0.0, r, r, 0.0]),
-        };
+        let radius = Radius::from(cosmic.radius_xl()[0]);
         button::Style {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),

@@ -10,6 +10,7 @@ mod pages;
 mod services;
 mod tiles;
 mod transition;
+mod widgets;
 mod workspaces;
 
 pub const APP_ID: &str = "io.github.DrakRosmann.CosmicExtAppletQuickSettings";
