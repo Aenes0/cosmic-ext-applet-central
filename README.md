@@ -79,6 +79,9 @@ O lápis no topo abre a edição, como no Android: os blocos aparecem com "−" 
 arraste um bloco para outra posição (os outros abrem espaço enquanto ele passa); tocar
 num bloco o seleciona para mover (Antes/Depois) ou mudar o tamanho (grande, com o nome, ou
 pequeno, só o ícone, metade da largura); embaixo, os blocos que faltam, com "+".
+Em **Tamanho**, ainda na edição, o popup fica mais largo e com mais espaço para telas
+grandes: Padrão (420 px), Grande (500 px) ou Extra grande (580 px); os espaçamentos, os
+blocos, os sliders e os botões crescem junto.
 O botão de desfazer no topo restaura o padrão. A escolha fica salva na configuração do COSMIC.
 
 ## Instalar

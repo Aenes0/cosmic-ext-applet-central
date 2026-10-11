@@ -4,6 +4,7 @@ mod app;
 mod audio;
 mod host;
 mod i18n;
+mod layout;
 mod media;
 mod notifications;
 mod pages;

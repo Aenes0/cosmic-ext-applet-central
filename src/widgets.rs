@@ -405,7 +405,7 @@ impl<'a, Message> Level<'a, Message> {
             on_release: None,
             on_icon_press: None,
             dimmed: false,
-            height: 44.0,
+            height: crate::layout::metrics().slider,
         }
     }
 

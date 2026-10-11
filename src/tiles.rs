@@ -12,6 +12,7 @@ use cosmic::{
 use crate::{
     app::Message,
     i18n::strings,
+    layout::metrics,
     widgets::{Surface, tile_radius},
 };
 
@@ -210,7 +211,7 @@ impl TileState {
         };
         widget::tooltip(
             Surface::new(
-                widget::container(widget::icon::icon(icon(self.icon)).size(20))
+                widget::container(widget::icon::icon(icon(self.icon)).size(metrics().icon))
                     .center(Length::Fill),
                 self.on,
             )
@@ -229,7 +230,7 @@ pub fn grid<'a>(
     row_height: f32,
 ) -> Element<'a, Message> {
     const COLUMNS: u16 = 4;
-    let spacing = theme::spacing().space_xs;
+    let spacing = metrics().grid_gap;
     let mut rows = widget::column::with_capacity(items.len()).spacing(spacing);
     let mut row: Vec<Element<'a, Message>> = Vec::new();
     let mut used = 0;
@@ -388,8 +389,9 @@ pub fn tile<'a>(
     if let Some(subtitle) = subtitle {
         text = text.push(widget::text::caption(subtitle).ellipsize(one_line()));
     }
+    let m = metrics();
     let mut content = widget::row::with_capacity(3)
-        .push(widget::icon::icon(icon(icon_name)).size(20))
+        .push(widget::icon::icon(icon(icon_name)).size(m.icon))
         .push(text.width(Length::Fill))
         .spacing(10)
         .align_y(Alignment::Center);
@@ -404,9 +406,9 @@ pub fn tile<'a>(
             .on_press(details.clone()),
         );
     }
-    let right = if details.is_some() { 8 } else { 14 };
+    let right = if details.is_some() { 8 } else { m.tile_padding };
     Surface::new(widget::container(content).center_y(Length::Fill), on)
-        .padding([0, right, 0, 14])
+        .padding([0, right, 0, m.tile_padding])
         .on_press(toggle)
         .on_right_press(details)
         .into()
