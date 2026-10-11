@@ -1260,6 +1260,7 @@ pub fn settings_subscription() -> Subscription<()> {
             let watchers: Vec<_> = [
                 (DO_NOT_DISTURB.config, DO_NOT_DISTURB.version),
                 (DARK_MODE.config, DARK_MODE.version),
+                (HOT_EDGE, 1),
                 (
                     "com.system76.CosmicComp",
                     COMP_CONFIG_VERSION,
@@ -1373,6 +1374,44 @@ pub fn set_dnd_until(until: Option<i64>) {
         .and_then(|c| c.set("do_not_disturb_until", until.unwrap_or(0)));
     if let Err(err) = result {
         tracing::warn!("cannot save when do not disturb ends: {err}");
+    }
+}
+
+/// The Hot Edge extension (cosmic-ext-hot-edge): its daemon, which makes the
+/// edge, and its settings.
+const HOT_EDGE: &str = "io.github.DrakRosmann.CosmicHotEdge";
+const HOT_EDGE_DAEMON: &str = "cosmic-ext-hot-edge-daemon";
+
+/// Whether the extension is installed: its daemon on the PATH, or where
+/// its installers put it.
+pub fn hot_edge_installed() -> bool {
+    static INSTALLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::env::var("PATH")
+            .unwrap_or_default()
+            .split(':')
+            .map(str::to_owned)
+            .chain([format!("{home}/.local/bin"), "/usr/bin".to_owned(), "/run/host/usr/bin".to_owned()])
+            .any(|dir| std::path::Path::new(&dir).join(HOT_EDGE_DAEMON).exists())
+    });
+    *INSTALLED
+}
+
+/// Whether the edge is on: the extension's default, until set.
+pub fn hot_edge() -> bool {
+    Config::new(HOT_EDGE, 1)
+        .and_then(|c| c.get::<bool>("enabled"))
+        .unwrap_or(true)
+}
+
+/// The daemon stays running while off and follows the setting; on, it is
+/// started too, in case it isn't (it runs once per session).
+pub fn set_hot_edge(enabled: bool) {
+    if let Err(err) = Config::new(HOT_EDGE, 1).and_then(|c| c.set("enabled", enabled)) {
+        tracing::warn!("cannot set the hot edge: {err}");
+    }
+    if enabled {
+        crate::host::spawn(HOT_EDGE_DAEMON, &[]);
     }
 }
 

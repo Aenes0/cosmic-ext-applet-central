@@ -33,10 +33,11 @@ pub enum Tile {
     Screenshot,
     Workspaces,
     Touchpad,
+    HotEdge,
 }
 
 impl Tile {
-    pub const ALL: [Tile; 16] = [
+    pub const ALL: [Tile; 17] = [
         Tile::Wifi,
         Tile::Bluetooth,
         Tile::Power,
@@ -53,6 +54,7 @@ impl Tile {
         Tile::Screenshot,
         Tile::Workspaces,
         Tile::Touchpad,
+        Tile::HotEdge,
     ];
 
     pub const DEFAULT: [Tile; 6] = [
@@ -83,11 +85,21 @@ impl Tile {
             Tile::Screenshot => "screenshot",
             Tile::Workspaces => "workspaces",
             Tile::Touchpad => "touchpad",
+            Tile::HotEdge => "hot-edge",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Tile> {
         Self::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    /// Whether what it needs is there to put it on: Hot Edge's only with the
+    /// extension.
+    pub fn available(self) -> bool {
+        match self {
+            Tile::HotEdge => crate::services::hot_edge_installed(),
+            _ => true,
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -109,6 +121,7 @@ impl Tile {
             Tile::Screenshot => t.screenshot,
             Tile::Workspaces => t.workspaces,
             Tile::Touchpad => t.touchpad,
+            Tile::HotEdge => t.hot_edge,
         }
     }
 
@@ -130,6 +143,7 @@ impl Tile {
             Tile::Screenshot => "accessories-screenshot-symbolic",
             Tile::Workspaces => "view-app-grid-symbolic",
             Tile::Touchpad => "input-touchpad-symbolic",
+            Tile::HotEdge => "input-mouse-symbolic",
         }
     }
 }

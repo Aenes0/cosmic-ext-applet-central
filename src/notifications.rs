@@ -54,6 +54,9 @@ pub fn load() -> Vec<Notification> {
     for notification in &mut notifications {
         notification.restored = true;
         notification.actions.clear();
+        // Kept before icons came from the apps' entries, or a file since gone.
+        notification.icon = app_icon(&notification.app, None, &notification.icon, None);
+        notification.body = plain(&notification.body);
     }
     notifications
 }
@@ -159,12 +162,21 @@ pub fn subscription() -> Subscription<Event> {
                         _ => None,
                     })
                     .collect();
+                let hint = |key: &str| match args.hints.get(key) {
+                    Some(Value::Str(value)) => Some(value.to_string()),
+                    _ => None,
+                };
                 Some(Event::New(Notification {
                     id: args.id,
                     app: args.app_name.to_owned(),
-                    icon: args.app_icon.to_owned(),
+                    icon: app_icon(
+                        args.app_name,
+                        hint("desktop-entry").as_deref(),
+                        args.app_icon,
+                        hint("image-path").as_deref(),
+                    ),
                     summary: args.summary.to_owned(),
-                    body: args.body.to_owned(),
+                    body: plain(args.body),
                     actions,
                     time: SystemTime::now(),
                     restored: false,
@@ -182,6 +194,151 @@ pub fn subscription() -> Subscription<Event> {
             futures::future::pending().await
         })
     })
+}
+
+/// The icon a notification shows, by name or as a file: its app's, from the
+/// app's desktop entry, as GNOME shows it; else the one it came with.
+/// Browsers send theirs as a `file://` URI, often to a file soon gone.
+fn app_icon(app: &str, desktop_entry: Option<&str>, icon: &str, image: Option<&str>) -> String {
+    if let Some(icon) = desktop_icon(app, desktop_entry) {
+        return icon;
+    }
+    [Some(icon), image]
+        .into_iter()
+        .flatten()
+        .map(|icon| icon.strip_prefix("file://").unwrap_or(icon))
+        .find(|icon| {
+            !icon.is_empty() && (!icon.starts_with('/') || std::path::Path::new(icon).exists())
+        })
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// An app's icon from its desktop entry: by the entry's name, which apps
+/// may say, or by the app's name.
+fn desktop_icon(app: &str, desktop_entry: Option<&str>) -> Option<String> {
+    use std::{collections::HashMap, sync::Mutex};
+    struct Entry {
+        id: String,
+        name: String,
+        wm_class: String,
+        icon: String,
+    }
+    static ENTRIES: Mutex<Option<Vec<Entry>>> = Mutex::new(None);
+    static FOUND: Mutex<Option<HashMap<(String, Option<String>), Option<String>>>> =
+        Mutex::new(None);
+
+    let key = (app.to_owned(), desktop_entry.map(str::to_owned));
+    if let Some(found) = FOUND.lock().ok()?.get_or_insert_default().get(&key) {
+        return found.clone();
+    }
+    let mut entries = ENTRIES.lock().ok()?;
+    let entries = entries.get_or_insert_with(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let data_home = std::env::var("XDG_DATA_HOME")
+            .unwrap_or_else(|_| format!("{home}/.local/share"));
+        let data_dirs = std::env::var("XDG_DATA_DIRS")
+            .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_owned());
+        let dirs = std::iter::once(data_home)
+            .chain(data_dirs.split(':').map(str::to_owned))
+            .chain([
+                format!("{home}/.local/share/flatpak/exports/share"),
+                "/var/lib/flatpak/exports/share".to_owned(),
+                // the host's, from a Flatpak sandbox
+                "/run/host/usr/share".to_owned(),
+            ]);
+        let mut entries = Vec::new();
+        for dir in dirs {
+            let Ok(files) = std::fs::read_dir(format!("{dir}/applications")) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().is_none_or(|e| e != "desktop") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let mut entry = Entry {
+                    id: path.file_stem().unwrap_or_default().to_string_lossy().to_lowercase(),
+                    name: String::new(),
+                    wm_class: String::new(),
+                    icon: String::new(),
+                };
+                // [Desktop Entry] only, not its actions'.
+                for line in text
+                    .lines()
+                    .skip_while(|l| l.trim() != "[Desktop Entry]")
+                    .skip(1)
+                    .take_while(|l| !l.starts_with('['))
+                {
+                    match line.split_once('=') {
+                        Some(("Name", value)) => entry.name = value.trim().to_lowercase(),
+                        Some(("StartupWMClass", value)) => {
+                            entry.wm_class = value.trim().to_lowercase()
+                        }
+                        Some(("Icon", value)) => entry.icon = value.trim().to_owned(),
+                        _ => {}
+                    }
+                }
+                if !entry.icon.is_empty() {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    });
+    let app = app.trim().to_lowercase();
+    let wanted = desktop_entry.map(|e| e.trim_end_matches(".desktop").to_lowercase());
+    let found = wanted
+        .and_then(|id| {
+            entries
+                .iter()
+                .find(|e| e.id == id)
+                .or_else(|| entries.iter().find(|e| e.id.rsplit('.').next() == Some(&id)))
+        })
+        .or_else(|| {
+            if app.is_empty() {
+                return None;
+            }
+            let dashed = app.replace(' ', "-");
+            entries
+                .iter()
+                .find(|e| e.name == app)
+                .or_else(|| entries.iter().find(|e| e.wm_class == app || e.id == dashed))
+                .or_else(|| entries.iter().find(|e| e.id.rsplit('.').next() == Some(&dashed)))
+        })
+        .map(|e| e.icon.clone());
+    FOUND
+        .lock()
+        .ok()?
+        .get_or_insert_default()
+        .insert(key, found.clone());
+    found
+}
+
+/// A body as text: without the markup some apps send (links, bold…), and
+/// with its entities read.
+fn plain(body: &str) -> String {
+    let mut text = String::with_capacity(body.len());
+    let mut in_tag = false;
+    for c in body.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+        .trim()
+        .to_owned()
 }
 
 /// Run an action, `default` being a click on the notification.
@@ -202,5 +359,24 @@ pub async fn dismiss(ids: Vec<u32>) {
     };
     for id in ids {
         _ = proxy.close_notification(id).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markup() {
+        assert_eq!(
+            plain("Ready: <a href=\"https://claude.ai/\">claude.ai</a> &amp; <b>more</b>"),
+            "Ready: claude.ai & more"
+        );
+    }
+
+    #[test]
+    fn sent_icon() {
+        assert_eq!(app_icon("", None, "dialog-information", None), "dialog-information");
+        assert_eq!(app_icon("", None, "file:///nowhere/logo.png", None), "");
     }
 }

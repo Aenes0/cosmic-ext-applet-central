@@ -105,6 +105,9 @@ pub enum Message {
     ToggleMicrophone,
     ToggleKeepAwake,
     ToggleTouchpad,
+    ToggleHotEdge,
+    /// Hot Edge's own settings app.
+    OpenHotEdge,
     /// A screen's name and height.
     Output(Option<String>, Option<i32>),
     ToggleShowPercentage,
@@ -246,6 +249,7 @@ pub struct App {
     /// Held while keeping the computer awake.
     pub(crate) inhibit: Option<u32>,
     pub(crate) touchpad: Option<services::Touchpad>,
+    pub(crate) hot_edge: bool,
     pub(crate) bar_spacing: BarSpacing,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
@@ -446,6 +450,7 @@ impl cosmic::Application for App {
             notifications: notifications::load(),
             dnd_until: services::dnd_until(),
             touchpad: services::touchpad(),
+            hot_edge: services::hot_edge(),
             bar_spacing: BarSpacing::load(),
             ..Self::default()
         };
@@ -703,6 +708,14 @@ impl cosmic::Application for App {
                 });
                 services::set_touchpad(enabled);
             }
+            Message::ToggleHotEdge => {
+                self.hot_edge = !self.hot_edge;
+                services::set_hot_edge(self.hot_edge);
+            }
+            Message::OpenHotEdge => {
+                spawn("cosmic-ext-hot-edge", &[]);
+                return self.close_popup();
+            }
             Message::ToggleKeepAwake => {
                 return match self.inhibit.take() {
                     Some(cookie) => run("allow idling", services::allow_idle(cookie)),
@@ -726,6 +739,7 @@ impl cosmic::Application for App {
                 self.dark_mode = DARK_MODE.get();
                 self.tiling_config = services::tiling_config();
                 self.touchpad = services::touchpad();
+                self.hot_edge = services::hot_edge();
             }
             Message::ToggleShowActive => {
                 self.show_active = !self.show_active;

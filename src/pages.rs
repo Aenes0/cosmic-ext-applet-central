@@ -998,7 +998,7 @@ impl App {
         // What can go on, as round icons with "+".
         let missing: Vec<Tile> = Tile::ALL
             .into_iter()
-            .filter(|tile| !self.tiles.iter().any(|p| p.tile == *tile))
+            .filter(|tile| tile.available() && !self.tiles.iter().any(|p| p.tile == *tile))
             .collect();
         if !missing.is_empty() {
             column = column.push(widget::text::heading(t.add));
@@ -1841,6 +1841,19 @@ impl App {
                 Some(Message::OpenWorkspaces),
                 None,
             ),
+            Tile::HotEdge => {
+                if !tile.available() {
+                    return None;
+                }
+                TileState::new(
+                    tile.icon(),
+                    t.hot_edge,
+                    None,
+                    self.hot_edge,
+                    Some(Message::ToggleHotEdge),
+                    Some(Message::OpenHotEdge),
+                )
+            }
             Tile::Touchpad => {
                 let touchpad = self.touchpad?;
                 TileState::new(

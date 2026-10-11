@@ -29,8 +29,10 @@ tempo restante, cada bloco ligado. Clicar abre:
 - blocos de Wi-Fi, Bluetooth (com a bateria do dispositivo conectado), Energia (alterna
   Economia/Equilibrado/Desempenho), Não perturbe, Tema escuro e Modo avião; dá para
   adicionar Microfone mudo, Manter acordado, Lado a lado (tiling), Lupa, Inverter cores,
-  Leitor de tela, Alto contraste, Captura de tela, Espaços de trabalho e Touchpad (liga e
-  desliga o touchpad, sem mexer no resto da configuração dele). Os blocos acendem e apagam
+  Leitor de tela, Alto contraste, Captura de tela, Espaços de trabalho, Touchpad (liga e
+  desliga o touchpad, sem mexer no resto da configuração dele) e Borda ativa (liga e desliga
+  a [borda ativa](https://github.com/DrakRosmann/cosmic-ext-hot-edge); só aparece com ela
+  instalada, e a seta abre o app dela). Os blocos acendem e apagam
   aos poucos e cedem um pouco ao serem apertados, como no Android; a seta redonda dentro
   deles, ou o clique direito em qualquer bloco (o toque longo do Android), abre a página;
   os pequenos, só com o ícone, dizem o nome ao passar o mouse;
@@ -48,7 +50,8 @@ tempo restante, cada bloco ligado. Clicar abre:
   mesmo app juntas (só a mais nova, com "+N" no cartão para ver o resto): clicar abre, os
   botões do app
   (como Responder ou Marcar como lida) aparecem no card, "×" dispensa, "Limpar tudo"
-  limpa. Elas continuam lá depois de reiniciar a sessão. O applet se apresenta ao painel
+  limpa. O ícone é o do app, do arquivo `.desktop` dele, como no GNOME; o HTML que alguns
+  apps mandam no texto (links, negrito) vira texto simples. Elas continuam lá depois de reiniciar a sessão. O applet se apresenta ao painel
   como applet de notificações (`X-NotificationsApplet`) e recebe as notificações do daemon
   do COSMIC, junto com o applet de notificações oficial.
 
@@ -147,6 +150,7 @@ se ficar repetido.
 | Saídas de som | `pactl` |
 | Mídia | MPRIS (`org.mpris.MediaPlayer2.*`); capas da web são baixadas com `curl` para o cache |
 | Notificações | cosmic-notifications, pelo socket que o painel dá aos applets de notificação |
+| Borda ativa | a configuração do `cosmic-ext-hot-edge` (`enabled`), que o daemon dele acompanha |
 | Telas, escala | `cosmic-randr` |
 | Brilho de monitores externos | `ddcutil` (DDC/CI) |
 
