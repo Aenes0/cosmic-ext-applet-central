@@ -45,7 +45,7 @@
         {
           "type": "git",
           "url": "https://github.com/DrakRosmann/cosmic-ext-applet-quick-settings.git",
-          "commit": "f58a9e73982fadfc02b468c81b04a29a7908f957"
+          "commit": "8aaa69d2ea1970f271f0d5e7f0b12b8f2750f0d3"
         },
         "cargo-sources.json"
       ]
