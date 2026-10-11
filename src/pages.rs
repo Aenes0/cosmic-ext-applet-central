@@ -15,10 +15,10 @@ use crate::{
     services,
     widgets::Level,
     app::{App, Dnd, Message, Page},
+    bar_spacing::BarSpacing,
     media::Control,
     notifications::Notification,
     i18n::strings,
-    layout::{Size, metrics},
     tiles::{
         Tile, TileState, badge, battery_icon, chip_class, edit_class, edit_container, grid, icon,
         symbolic,
@@ -97,7 +97,7 @@ fn card_container<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> widget::Container<'a, Message, cosmic::Theme> {
     widget::container(content)
-        .padding(metrics().card_padding)
+        .padding(12)
         .width(Length::Fill)
         .class(theme::Container::custom(|theme| {
             let component = &theme.cosmic().background(theme.transparent).component;
@@ -241,6 +241,8 @@ fn play_class(color: [u8; 3]) -> theme::Button {
 
 /// Cards' corners: rounded, never a pill, however round the theme.
 const CARD_RADIUS: f32 = 16.0;
+/// Between the popup's panels.
+pub const PANEL_GAP: f32 = 8.0;
 
 /// A panel of the popup, as COSMIC draws a popup: there are two on the main
 /// page, the controls and the notifications, apart.
@@ -348,7 +350,7 @@ impl App {
         more: Option<(&'a str, &'static str)>,
     ) -> Element<'a, Message> {
         let mut header = widget::row::with_capacity(4)
-            .push(circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), metrics().button))
+            .push(circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), 36.0))
             .push(
                 widget::text::title4(title)
                     .width(Length::Fill),
@@ -686,7 +688,7 @@ impl App {
             (crate::tiles::tile(icon_name, label, None, false, Some(message), None), 2)
         })
         .collect();
-        let body = vec![padded_control(grid(body, metrics().tile_height)).into()];
+        let body = vec![padded_control(grid(body, 64.0)).into()];
         self.page(t.session, None, body, None)
     }
 
@@ -872,10 +874,9 @@ impl App {
     pub fn edit_page(&self) -> Element<'_, Message> {
         let t = strings();
         let spacing = theme::spacing();
-        let m = metrics();
 
         let header = widget::row::with_children(vec![
-            circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), m.button).into(),
+            circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), 36.0).into(),
             widget::text::title4(t.edit_tiles).width(Length::Fill).into(),
             widget::tooltip(
                 button::icon(icon("edit-undo-symbolic"))
@@ -900,7 +901,7 @@ impl App {
                 let state = self.tile_state(placed.tile);
                 let icon_name = state.as_ref().map_or(placed.tile.icon(), |s| s.icon);
                 let mut content = widget::row::with_capacity(2)
-                    .push(widget::icon::icon(icon(icon_name)).size(m.icon))
+                    .push(widget::icon::icon(icon(icon_name)).size(20))
                     .spacing(10)
                     .align_y(Alignment::Center);
                 if !placed.small {
@@ -917,7 +918,7 @@ impl App {
                 let content = if placed.small {
                     content.center_x(Length::Fill)
                 } else {
-                    content.width(Length::Fill).padding([0, m.tile_padding])
+                    content.width(Length::Fill).padding([0, 14])
                 };
                 let body = widget::mouse_area(content.class(edit_container(selected)))
                 .on_press(Message::DragStart(index))
@@ -937,7 +938,7 @@ impl App {
                 (tile, placed.columns())
             })
             .collect();
-        let shown = widget::container(grid(items, m.tile_height))
+        let shown = widget::container(grid(items, 64.0))
             .padding(spacing.space_xs)
             .class(theme::Container::custom(|theme| {
                 let cosmic = theme.cosmic();
@@ -955,7 +956,7 @@ impl App {
             .push(header)
             .push(widget::text::caption(t.edit_hint).class(theme::Text::Custom(dimmed)))
             .push(shown)
-            .spacing(m.gap);
+            .spacing(spacing.space_s);
 
         // Move or resize the chosen tile.
         if let Some(placed) = self.selected_tile.and_then(|i| self.tiles.get(i).map(|p| (i, p))) {
@@ -1053,36 +1054,32 @@ impl App {
             .align_y(Alignment::Center),
         );
 
-        // Wider and roomier, for a big screen.
-        let sizes = Size::ALL.map(|size| -> Element<'_, Message> {
-            let chosen = self.size == size;
+        // Further apart on a big screen.
+        let choices = BarSpacing::ALL.map(|choice| -> Element<'_, Message> {
+            let chosen = self.bar_spacing == choice;
             button::custom(
                 widget::row::with_capacity(2)
                     .push_maybe(chosen.then(|| {
                         widget::icon::icon(icon("object-select-symbolic")).size(16)
                     }))
-                    .push(widget::text::body(size.name()))
+                    .push(widget::text::body(choice.name()))
                     .spacing(spacing.space_xxs)
                     .align_y(Alignment::Center),
             )
             .padding([8, 12])
             .width(Length::Fill)
             .class(chip_class(chosen))
-            .on_press(Message::SetSize(size))
+            .on_press(Message::SetBarSpacing(choice))
             .into()
         });
         column = column.push(
             widget::column::with_children(vec![
-                widget::text::heading(t.size).into(),
-                widget::text::caption(t.size_hint)
-                    .class(theme::Text::Custom(dimmed))
-                    .into(),
-                widget::row::with_children(sizes)
+                widget::text::body(t.bar_spacing).into(),
+                widget::row::with_children(choices)
                     .spacing(spacing.space_xxs)
-                    .padding([spacing.space_xxs, 0, 0, 0])
                     .into(),
             ])
-            .spacing(2)
+            .spacing(spacing.space_xs)
             .padding([0, spacing.space_xxs]),
         );
         column = column.push(
@@ -1103,26 +1100,26 @@ impl App {
             ]),
         );
 
-        widget::scrollable(column.padding(m.gap)).height(Length::Shrink).into()
+        widget::scrollable(column.padding(spacing.space_s)).height(Length::Shrink).into()
     }
 
     /// Two panels, apart, as Android's shade: the controls, and under them
     /// the notifications, which get what the controls leave: the controls
     /// stay put and only the notifications scroll.
     pub fn main_page(&self) -> Element<'_, Message> {
-        let m = metrics();
+        let spacing = theme::spacing();
         let mut sections = vec![self.header()];
         sections.extend(self.privacy_banner());
         sections.extend([self.sliders(), self.tiles()]);
         sections.extend(self.media_card());
         let controls = panel(
             widget::column::with_children(sections)
-                .spacing(m.gap)
-                .padding(m.gap),
+                .spacing(spacing.space_s)
+                .padding(spacing.space_s),
         );
         // As tall as the popup's limits let it be, from the screen's height.
         widget::column::with_children(vec![controls, panel(self.notifications_panel())])
-            .spacing(m.panel_gap)
+            .spacing(PANEL_GAP)
             .into()
     }
 
@@ -1172,16 +1169,15 @@ impl App {
     fn media_card(&self) -> Option<Element<'_, Message>> {
         let media = self.shown_media()?;
         let spacing = theme::spacing();
-        let m = metrics();
         let cover: Element<'_, Message> = match &media.art {
             Some(path) => widget::image(widget::image::Handle::from_path(path))
-                .width(Length::Fixed(m.cover))
-                .height(Length::Fixed(m.cover))
+                .width(Length::Fixed(56.0))
+                .height(Length::Fixed(56.0))
                 .content_fit(iced::ContentFit::Cover)
                 .border_radius(12.0)
                 .into(),
             None => widget::container(widget::icon::icon(icon("audio-x-generic-symbolic")).size(28))
-                .center(Length::Fixed(m.cover))
+                .center(Length::Fixed(56.0))
                 .class(theme::Container::custom(|theme| widget::container::Style {
                     background: Some(Background::Color(
                         theme.cosmic().background(theme.transparent).component.hover.into(),
@@ -1339,7 +1335,7 @@ impl App {
         Some(match color {
             // In the cover's colors, as phones show what's playing.
             Some(color) => widget::container(card)
-                .padding(m.card_padding + 2)
+                .padding(14)
                 .width(Length::Fill)
                 .class(theme::Container::custom(move |theme| {
                     let (background, foreground) = tint(color, theme.cosmic().is_dark);
@@ -1364,7 +1360,6 @@ impl App {
     fn notifications_panel(&self) -> Element<'_, Message> {
         let t = strings();
         let spacing = theme::spacing();
-        let m = metrics();
         if self.notifications.is_empty() {
             // As Android says it, in a line: little room may be left.
             return widget::container(
@@ -1378,7 +1373,7 @@ impl App {
                 .align_y(Alignment::Center),
             )
             .center_x(Length::Fill)
-            .padding(m.gap)
+            .padding(spacing.space_s)
             .into();
         }
         let header = widget::row::with_children(vec![
@@ -1434,11 +1429,11 @@ impl App {
                 cards.push(self.notification_card(group[0], more));
             }
         }
-        let list = widget::scrollable(widget::column::with_children(cards).spacing(m.near))
+        let list = widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
             .height(Length::Shrink);
         widget::column::with_children(vec![header.into(), list.into()])
-            .spacing(m.near)
-            .padding(m.gap)
+            .spacing(spacing.space_xs)
+            .padding(spacing.space_s)
             .into()
     }
 
@@ -1550,13 +1545,13 @@ impl App {
             );
         }
         let content = widget::row::with_children(vec![
-            widget::icon::icon(app_icon).size(metrics().app_icon).into(),
+            widget::icon::icon(app_icon).size(32).into(),
             text.width(Length::Fill).into(),
             side.into(),
         ])
         .spacing(spacing.space_s);
         button::custom(content)
-            .padding(metrics().card_padding)
+            .padding(12)
             .width(Length::Fill)
             .class(card_class())
             .on_press(Message::OpenNotification(key))
@@ -1565,7 +1560,6 @@ impl App {
 
     fn header(&self) -> Element<'_, Message> {
         let t = strings();
-        let button_size = metrics().button;
         let mut row = widget::row::with_capacity(6)
             .spacing(theme::spacing().space_xs)
             .align_y(Alignment::Center);
@@ -1584,7 +1578,7 @@ impl App {
                     .spacing(theme::spacing().space_xxs)
                     .align_y(Alignment::Center),
                 )
-                .padding([((button_size - 16.0) / 2.0) as u16, 14])
+                .padding([10, 14])
                 .class(pill_class())
                 .on_press(Message::ShowPage(Page::Power)),
             );
@@ -1592,7 +1586,7 @@ impl App {
         row = row.push(widget::space::horizontal());
         let action = |icon_name: &'static str, tooltip: &'static str, message| {
             widget::tooltip(
-                circle_button(icon_name, message, button_size),
+                circle_button(icon_name, message, 36.0),
                 widget::text::body(tooltip),
                 widget::tooltip::Position::Bottom,
             )
@@ -1611,21 +1605,21 @@ impl App {
     /// Volume and brightness, thick, as phones have them, each with a round
     /// arrow to its page.
     fn sliders(&self) -> Element<'_, Message> {
-        let m = metrics();
-        let mut column = widget::column::with_capacity(2).spacing(m.near);
+        let spacing = theme::spacing();
+        let mut column = widget::column::with_capacity(2).spacing(spacing.space_xs);
         let slider_row = |level: Level<'static, Message>, more: Message| {
             widget::row::with_children(vec![
                 level.into(),
-                circle_button("go-next-symbolic", more, m.slider).into(),
+                circle_button("go-next-symbolic", more, 44.0).into(),
             ])
-            .spacing(m.near)
+            .spacing(spacing.space_xs)
             .align_y(Alignment::Center)
         };
         if let Some(volume) = &self.volume {
             column = column.push(slider_row(
                 // the icon mutes
                 Level::new(
-                    widget::icon::icon(icon(self.volume_icon())).size(m.icon),
+                    widget::icon::icon(icon(self.volume_icon())).size(20),
                     volume.level,
                     |level| Message::SetVolume(level * 100.0),
                 )
@@ -1637,7 +1631,7 @@ impl App {
         if let Some((current, max)) = self.brightness {
             column = column.push(slider_row(
                 Level::new(
-                    widget::icon::icon(icon("display-brightness-symbolic")).size(m.icon),
+                    widget::icon::icon(icon("display-brightness-symbolic")).size(20),
                     current as f32 / max.max(1) as f32,
                     |level| Message::SetBrightness(level * 100.0),
                 ),
@@ -1876,7 +1870,7 @@ impl App {
                 Some((element, placed.columns()))
             })
             .collect();
-        grid(items, metrics().tile_height)
+        grid(items, 64.0)
     }
 }
 

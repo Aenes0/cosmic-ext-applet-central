@@ -16,8 +16,8 @@ use zbus::zvariant::OwnedObjectPath;
 use crate::{
     pages,
     audio::{self, Mixer, Privacy},
+    bar_spacing::BarSpacing,
     i18n::strings,
-    layout::{self, Size},
     workspaces,
     media::{self, Control, Media},
     notifications::{self, Notification},
@@ -30,6 +30,7 @@ use crate::{
     transition::Transition,
 };
 
+const WIDTH: f32 = 420.0;
 /// The popup grows with what it shows up to this, until the screen's height
 /// is known; past it the notifications scroll.
 pub const MAX_HEIGHT: f32 = 800.0;
@@ -176,8 +177,8 @@ pub enum Message {
     RemoveTile(usize),
     AddTile(Tile),
     ResetTiles,
-    /// How roomy the popup is.
-    SetSize(Size),
+    /// How far apart the icons on the panel are.
+    SetBarSpacing(BarSpacing),
     /// A page of COSMIC Settings, or all of it.
     Settings(Option<&'static str>),
     Screenshot,
@@ -245,7 +246,7 @@ pub struct App {
     /// Held while keeping the computer awake.
     pub(crate) inhibit: Option<u32>,
     pub(crate) touchpad: Option<services::Touchpad>,
-    pub(crate) size: Size,
+    pub(crate) bar_spacing: BarSpacing,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
 }
@@ -417,10 +418,9 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
 }
 
 fn popup_limits(max_height: f32) -> Limits {
-    let width = layout::metrics().width;
     Limits::NONE
-        .min_width(width)
-        .max_width(width)
+        .min_width(WIDTH)
+        .max_width(WIDTH)
         .min_height(1.0)
         .max_height(max_height)
 }
@@ -446,7 +446,7 @@ impl cosmic::Application for App {
             notifications: notifications::load(),
             dnd_until: services::dnd_until(),
             touchpad: services::touchpad(),
-            size: layout::load(),
+            bar_spacing: BarSpacing::load(),
             ..Self::default()
         };
         // COSMIC_QS_PREVIEW=sound opens the popup on that page by itself, to
@@ -1037,20 +1037,9 @@ impl cosmic::Application for App {
                 self.selected_tile = None;
                 self.save_tiles();
             }
-            Message::SetSize(size) => {
-                if size == self.size {
-                    return Task::none();
-                }
-                self.size = size;
-                layout::set(size);
-                // The popup's width is set as it opens: open it again, wider
-                // or narrower, where it was.
-                if let Some(id) = self.popup.take() {
-                    let page = self.page;
-                    let open = self.update(Message::TogglePopup);
-                    self.page = page;
-                    return destroy_popup(id).chain(open);
-                }
+            Message::SetBarSpacing(spacing) => {
+                self.bar_spacing = spacing;
+                spacing.save();
             }
             Message::Settings(page) => {
                 spawn("cosmic-settings", page.as_slice());
@@ -1337,7 +1326,7 @@ impl cosmic::Application for App {
         }
         let button = button::custom(
             widget::row::with_children(icons)
-                .spacing(layout::metrics().bar_gap)
+                .spacing(self.bar_spacing.gap())
                 .align_y(Alignment::Center),
         )
         .padding([minor, major])
