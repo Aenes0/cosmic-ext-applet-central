@@ -81,7 +81,8 @@ num bloco o seleciona para mover (Antes/Depois) ou mudar o tamanho (grande, com 
 pequeno, só o ícone, metade da largura); embaixo, os blocos que faltam, com "+".
 Em **Tamanho**, ainda na edição, o popup fica mais largo e com mais espaço para telas
 grandes: Padrão (420 px), Grande (500 px) ou Extra grande (580 px); os espaçamentos, os
-blocos, os sliders e os botões crescem junto.
+blocos, os sliders e os botões crescem junto, e os ícones na barra ficam mais
+afastados uns dos outros.
 O botão de desfazer no topo restaura o padrão. A escolha fica salva na configuração do COSMIC.
 
 ## Instalar

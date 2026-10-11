@@ -1337,7 +1337,7 @@ impl cosmic::Application for App {
         }
         let button = button::custom(
             widget::row::with_children(icons)
-                .spacing(theme::spacing().space_xxs)
+                .spacing(layout::metrics().bar_gap)
                 .align_y(Alignment::Center),
         )
         .padding([minor, major])

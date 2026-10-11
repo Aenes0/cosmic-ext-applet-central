@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! How roomy the popup is: as a phone's, or wider and airier for a big
-//! desktop screen.
+//! How roomy the popup and the icons on the panel are: as a phone's, or
+//! wider and airier for a big desktop screen.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -98,6 +98,8 @@ pub struct Metrics {
     pub cover: f32,
     pub card_padding: u16,
     pub app_icon: u16,
+    /// Between the icons on the panel.
+    pub bar_gap: u16,
 }
 
 pub fn metrics() -> Metrics {
@@ -124,5 +126,10 @@ pub fn metrics() -> Metrics {
         cover: grow(56.0),
         card_padding: grow(12.0) as u16,
         app_icon: grow(32.0) as u16,
+        bar_gap: match size {
+            Size::Default => spacing.space_xxs,
+            Size::Large => spacing.space_xs,
+            Size::ExtraLarge => spacing.space_s,
+        },
     }
 }
