@@ -16,6 +16,9 @@ No painel ficam, da esquerda para a direita:
 - as baterias: cada periférico sem fio (mouse, teclado, fone…) com a carga dele e, na
   borda, a do computador; rolar o mouse sobre ela muda o brilho da tela.
 
+Num painel na lateral da tela, os ícones ficam em coluna, com os números (notificações
+novas, bateria) embaixo de cada um.
+
 Passar o mouse sobre cada ícone mostra o que ele diz: a rede, o volume, a bateria com o
 tempo restante, cada bloco ligado. Clicar abre:
 
@@ -51,7 +54,9 @@ tempo restante, cada bloco ligado. Clicar abre:
   botões do app
   (como Responder ou Marcar como lida) aparecem no card, "×" dispensa, "Limpar tudo"
   limpa. O ícone é o do app, do arquivo `.desktop` dele, como no GNOME; o HTML que alguns
-  apps mandam no texto (links, negrito) vira texto simples. Elas continuam lá depois de reiniciar a sessão. O applet se apresenta ao painel
+  apps mandam no texto (links, negrito) vira texto simples. Elas continuam lá depois de reiniciar a sessão.
+  Fechar no "×" o aviso que aparece na tela não tira a notificação daqui, como no Android;
+  clicar no aviso para abrir, sim. O applet se apresenta ao painel
   como applet de notificações (`X-NotificationsApplet`) e recebe as notificações do daemon
   do COSMIC, junto com o applet de notificações oficial.
 

@@ -152,9 +152,11 @@ pub enum Message {
     SetDoNotDisturb(Dnd),
     CheckDoNotDisturb,
     Mixer(Mixer),
-    /// An app, by index in the mixer, and its volume in percent.
-    SetStreamVolume(usize, f32),
-    ToggleStreamMute(usize),
+    /// An app, by name in the mixer, and its volume in percent.
+    SetStreamVolume(String, f32),
+    ToggleStreamMute(String),
+    /// A volume slider let go.
+    AdjustDone,
     SetSource(String),
     SetInputVolume(f32),
     ToggleInputMute,
@@ -253,6 +255,10 @@ pub struct App {
     pub(crate) bar_spacing: BarSpacing,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
+    /// When a volume slider last moved. What PipeWire tells meanwhile is
+    /// the slider's own change, from a moment before: it would pull the
+    /// slider back, and reload the list under it.
+    adjusting: Option<std::time::Instant>,
 }
 
 impl App {
@@ -305,6 +311,18 @@ impl App {
 
     pub(crate) fn new_count(&self) -> usize {
         self.notifications.iter().filter(|n| self.is_new(n)).count()
+    }
+
+    fn stream_mut(&mut self, app: &str) -> Option<&mut audio::Stream> {
+        self.mixer
+            .as_mut()?
+            .streams
+            .iter_mut()
+            .find(|stream| stream.app == app)
+    }
+
+    fn adjusting(&self) -> bool {
+        self.adjusting.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
     }
 
     /// How tall the popup can be: as the screen allows.
@@ -533,6 +551,7 @@ impl cosmic::Application for App {
                 }
                 Update::Bluetooth(bluetooth) => self.bluetooth = bluetooth,
                 Update::Battery(battery) => self.battery = battery,
+                Update::Volume(_) | Update::Audio if self.adjusting() => {}
                 Update::Volume(volume) => {
                     let changed = volume.is_some() != self.volume.is_some();
                     self.volume = volume;
@@ -551,6 +570,7 @@ impl cosmic::Application for App {
                 Update::PowerProfiles(power) => self.power = power,
             },
             Message::SetVolume(percent) => {
+                self.adjusting = Some(std::time::Instant::now());
                 let level = percent / 100.0;
                 if let Some(volume) = self.volume.as_mut() {
                     volume.level = level;
@@ -899,6 +919,15 @@ impl cosmic::Application for App {
                     notifications::save(&self.notifications);
                 }
                 notifications::Event::Closed(id) => self.remove_notification((id, false)),
+                notifications::Event::Dismissed(id) => {
+                    if let Some(notification) =
+                        self.notifications.iter_mut().find(|n| !n.restored && n.id == id)
+                    {
+                        notification.restored = true;
+                        notification.actions.clear();
+                        notifications::save(&self.notifications);
+                    }
+                }
             },
             Message::OpenNotification(key) => {
                 self.remove_notification(key);
@@ -1083,10 +1112,17 @@ impl cosmic::Application for App {
                 spawn("systemctl", &["suspend"]);
                 return self.close_popup();
             }
+            Message::Mixer(_) if self.adjusting() => {}
             Message::Mixer(mixer) => self.mixer = Some(mixer),
-            Message::SetStreamVolume(index, percent) => {
-                let Some(stream) = self.mixer.as_mut().and_then(|m| m.streams.get_mut(index))
-                else {
+            Message::AdjustDone => {
+                self.adjusting = None;
+                if self.page == Some(Page::Sound) {
+                    return load_mixer();
+                }
+            }
+            Message::SetStreamVolume(app, percent) => {
+                self.adjusting = Some(std::time::Instant::now());
+                let Some(stream) = self.stream_mut(&app) else {
                     return Task::none();
                 };
                 stream.level = percent / 100.0;
@@ -1096,9 +1132,8 @@ impl cosmic::Application for App {
                     cosmic::action::app(Message::None)
                 });
             }
-            Message::ToggleStreamMute(index) => {
-                let Some(stream) = self.mixer.as_mut().and_then(|m| m.streams.get_mut(index))
-                else {
+            Message::ToggleStreamMute(app) => {
+                let Some(stream) = self.stream_mut(&app) else {
                     return Task::none();
                 };
                 stream.muted = !stream.muted;
@@ -1118,6 +1153,7 @@ impl cosmic::Application for App {
                 });
             }
             Message::SetInputVolume(percent) => {
+                self.adjusting = Some(std::time::Instant::now());
                 let level = percent / 100.0;
                 if let Some(input) = self.mixer.as_mut().and_then(|m| m.input.as_mut()) {
                     input.level = level;
@@ -1227,15 +1263,26 @@ impl cosmic::Application for App {
                 .applet_tooltip(content, text, self.popup.is_some(), Message::Surface, None)
                 .into()
         };
+        // On a panel at a side of the screen, the icons go in a column, and
+        // what an icon says goes under it, smaller, to fit the panel's width.
+        let horizontal = applet.is_horizontal();
         let with_text = |icon: Element<'static, Message>, text: String, accent: bool| -> Element<'static, Message> {
-            let label = applet.text(text);
-            widget::row::with_children(vec![
-                icon,
-                if accent { label.class(theme::Text::Accent).into() } else { label.into() },
-            ])
-            .spacing(2)
-            .align_y(Alignment::Center)
-            .into()
+            let label = if horizontal {
+                applet.text(text)
+            } else {
+                widget::text::caption(text)
+            };
+            let label = if accent { label.class(theme::Text::Accent).into() } else { label.into() };
+            if horizontal {
+                widget::row::with_children(vec![icon, label])
+                    .spacing(2)
+                    .align_y(Alignment::Center)
+                    .into()
+            } else {
+                widget::column::with_children(vec![icon, label])
+                    .align_x(Alignment::Center)
+                    .into()
+            }
         };
 
         let mut icons: Vec<Element<'_, Message>> = Vec::with_capacity(10);
@@ -1338,14 +1385,21 @@ impl cosmic::Application for App {
                 .on_scroll(|delta| Message::ScrollBrightness(scroll_steps(delta)));
             icons.push(tip(area.into(), text));
         }
-        let button = button::custom(
+        let icons: Element<'_, Message> = if horizontal {
             widget::row::with_children(icons)
                 .spacing(self.bar_spacing.gap())
-                .align_y(Alignment::Center),
-        )
-        .padding([minor, major])
-        .class(theme::Button::AppletIcon)
-        .on_press_down(Message::TogglePopup);
+                .align_y(Alignment::Center)
+                .into()
+        } else {
+            widget::column::with_children(icons)
+                .spacing(self.bar_spacing.gap())
+                .align_x(Alignment::Center)
+                .into()
+        };
+        let button = button::custom(icons)
+            .padding(if horizontal { [minor, major] } else { [major, minor] })
+            .class(theme::Button::AppletIcon)
+            .on_press_down(Message::TogglePopup);
         applet.autosize_window(button).into()
     }
 

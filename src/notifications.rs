@@ -7,7 +7,7 @@
 //! are dismissed through the usual `org.freedesktop.Notifications`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     os::unix::io::{FromRawFd, RawFd},
     time::SystemTime,
 };
@@ -80,8 +80,15 @@ pub fn save(notifications: &[Notification]) {
 #[derive(Clone, Debug)]
 pub enum Event {
     New(Notification),
+    /// Gone: opened, or closed by its app or from here.
     Closed(u32),
+    /// Its popup closed by hand. It stays, as a heads-up swiped away on
+    /// Android does, but the daemon has let go of it.
+    Dismissed(u32),
 }
+
+/// `NotificationClosed`'s reason when the user closed it.
+const DISMISSED_BY_USER: u32 = 2;
 
 #[zbus::proxy(
     default_service = "com.system76.NotificationsApplet",
@@ -115,6 +122,16 @@ trait Notifications {
 
     #[zbus(signal)]
     fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn action_invoked(&self, id: u32, action_key: &str) -> zbus::Result<()>;
+}
+
+/// What the daemon and the bus tell, before it makes an event.
+enum Signal {
+    New(Notification),
+    Invoked(u32),
+    Closed(u32, u32),
 }
 
 /// The connection to the daemon, if the panel gave us one.
@@ -146,9 +163,10 @@ pub fn subscription() -> Subscription<Event> {
             let Ok(freedesktop) = NotificationsProxy::new(&session).await else {
                 return futures::future::pending().await;
             };
-            let (Ok(notify), Ok(closed)) = (
+            let (Ok(notify), Ok(closed), Ok(invoked)) = (
                 daemon.receive_notify().await,
                 freedesktop.receive_notification_closed().await,
+                freedesktop.receive_action_invoked().await,
             ) else {
                 return futures::future::pending().await;
             };
@@ -166,7 +184,7 @@ pub fn subscription() -> Subscription<Event> {
                     Some(Value::Str(value)) => Some(value.to_string()),
                     _ => None,
                 };
-                Some(Event::New(Notification {
+                Some(Signal::New(Notification {
                     id: args.id,
                     app: args.app_name.to_owned(),
                     icon: app_icon(
@@ -183,16 +201,42 @@ pub fn subscription() -> Subscription<Event> {
                 }))
             });
             let closed = closed.filter_map(|signal| async move {
-                Some(Event::Closed(signal.args().ok()?.id))
+                let args = signal.args().ok()?;
+                Some(Signal::Closed(args.id, args.reason))
             });
-            let mut events = futures::stream::select(notify.boxed(), closed.boxed());
-            while let Some(event) = events.next().await {
+            let invoked = invoked.filter_map(|signal| async move {
+                Some(Signal::Invoked(signal.args().ok()?.id))
+            });
+            let mut signals =
+                futures::stream::select_all([notify.boxed(), closed.boxed(), invoked.boxed()]);
+            let mut opened = HashSet::new();
+            while let Some(signal) = signals.next().await {
+                let Some(event) = event(&mut opened, signal) else {
+                    continue;
+                };
                 if output.send(event).await.is_err() {
                     return;
                 }
             }
             futures::future::pending().await
         })
+    })
+}
+
+/// What a signal means here. A click on a popup runs its action, then
+/// closes it as the user would: those opened go, the others stay.
+fn event(opened: &mut HashSet<u32>, signal: Signal) -> Option<Event> {
+    Some(match signal {
+        Signal::New(notification) => Event::New(notification),
+        Signal::Invoked(id) => {
+            opened.insert(id);
+            return None;
+        }
+        Signal::Closed(id, DISMISSED_BY_USER) if !opened.contains(&id) => Event::Dismissed(id),
+        Signal::Closed(id, _) => {
+            opened.remove(&id);
+            Event::Closed(id)
+        }
     })
 }
 
@@ -372,6 +416,20 @@ mod tests {
             plain("Ready: <a href=\"https://claude.ai/\">claude.ai</a> &amp; <b>more</b>"),
             "Ready: claude.ai & more"
         );
+    }
+
+    #[test]
+    fn popups_closed() {
+        let mut opened = HashSet::new();
+        let mut close = |signal| event(&mut opened, signal);
+        // Closed by hand on its popup: kept.
+        assert!(matches!(close(Signal::Closed(1, 2)), Some(Event::Dismissed(1))));
+        // Clicked: its action, then closed twice, as cosmic-notifications does.
+        assert!(close(Signal::Invoked(2)).is_none());
+        assert!(matches!(close(Signal::Closed(2, 2)), Some(Event::Closed(2))));
+        assert!(matches!(close(Signal::Closed(2, 2)), Some(Event::Dismissed(2))));
+        // Closed by its app: gone.
+        assert!(matches!(close(Signal::Closed(3, 3)), Some(Event::Closed(3))));
     }
 
     #[test]

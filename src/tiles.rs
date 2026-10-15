@@ -12,7 +12,7 @@ use cosmic::{
 use crate::{
     app::Message,
     i18n::strings,
-    widgets::{Surface, tile_radius},
+    widgets::{Surface, inherit_colors, readable, tile_radius},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,7 +225,8 @@ impl TileState {
         widget::tooltip(
             Surface::new(
                 widget::container(widget::icon::icon(icon(self.icon)).size(20))
-                    .center(Length::Fill),
+                    .center(Length::Fill)
+                    .class(inherit_colors()),
                 self.on,
             )
             .on_press(self.toggle)
@@ -281,7 +282,11 @@ pub fn grid<'a>(
 
 /// A round badge on a tile's corner, to take it off or put it on.
 pub fn badge<'a>(icon_name: &str, message: Message) -> Element<'a, Message> {
-    button::custom(widget::container(widget::icon::icon(icon(icon_name)).size(12)).center(Length::Fill))
+    button::custom(
+        widget::container(widget::icon::icon(icon(icon_name)).size(12))
+            .center(Length::Fill)
+            .class(inherit_colors()),
+    )
         .width(Length::Fixed(22.0))
         .height(Length::Fixed(22.0))
         .class(tile_class(true))
@@ -411,7 +416,8 @@ pub fn tile<'a>(
         content = content.push(
             button::custom(
                 widget::container(widget::icon::icon(icon("go-next-symbolic")).size(16))
-                    .center(Length::Fixed(30.0)),
+                    .center(Length::Fixed(30.0))
+                    .class(inherit_colors()),
             )
             .padding(0)
             .class(arrow_class(on))
@@ -419,7 +425,10 @@ pub fn tile<'a>(
         );
     }
     let right = if details.is_some() { 8 } else { 14 };
-    Surface::new(widget::container(content).center_y(Length::Fill), on)
+    Surface::new(
+        widget::container(content).center_y(Length::Fill).class(inherit_colors()),
+        on,
+    )
         .padding([0, right, 0, 14])
         .on_press(toggle)
         .on_right_press(details)
@@ -430,15 +439,17 @@ pub fn tile<'a>(
 fn arrow_class(on: bool) -> theme::Button {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let mut shade: iced::Color = if on {
-            cosmic.accent_button.on
+        let component = if on {
+            &cosmic.accent_button
         } else {
-            cosmic.background(theme.transparent).component.on
-        }
-        .into();
+            &cosmic.background(theme.transparent).component
+        };
+        let on = readable(component.on, component.base);
+        let mut shade = on;
         shade.a = if hovered { 0.2 } else { 0.1 };
         button::Style {
             background: Some(Background::Color(shade)),
+            icon_color: Some(on),
             border_radius: 16.0.into(),
             ..button::Style::new()
         }
@@ -470,8 +481,8 @@ fn tile_class(on: bool) -> theme::Button {
                 if hovered { component.hover } else { component.base }.into(),
             )),
             border_radius: radius,
-            text_color: Some(component.on.into()),
-            icon_color: Some(component.on.into()),
+            text_color: Some(readable(component.on, component.base)),
+            icon_color: Some(readable(component.on, component.base)),
             ..button::Style::new()
         }
     };

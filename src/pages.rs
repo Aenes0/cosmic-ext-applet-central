@@ -13,7 +13,7 @@ use cosmic::{
 
 use crate::{
     services,
-    widgets::Level,
+    widgets::{Level, inherit_colors},
     app::{App, Dnd, Message, Page},
     bar_spacing::BarSpacing,
     media::Control,
@@ -579,7 +579,8 @@ impl App {
             Some(streams) if !streams.is_empty() => {
                 // As in Windows' mixer: each app's name over its slider, its
                 // icon inside, which mutes it.
-                for (index, stream) in streams.iter().enumerate() {
+                for stream in streams {
+                    let app = stream.app.clone();
                     body.push(
                         padded_control(
                             widget::column::with_children(vec![
@@ -587,9 +588,10 @@ impl App {
                                 Level::new(
                                     widget::icon::icon(app_icon(stream.icon.as_deref())).size(22),
                                     stream.level,
-                                    move |level| Message::SetStreamVolume(index, level * 100.0),
+                                    move |level| Message::SetStreamVolume(app.clone(), level * 100.0),
                                 )
-                                .on_icon_press(Some(Message::ToggleStreamMute(index)))
+                                .on_release(Message::AdjustDone)
+                                .on_icon_press(Some(Message::ToggleStreamMute(stream.app.clone())))
                                 .dimmed(stream.muted)
                                 .into(),
                             ])
@@ -619,6 +621,7 @@ impl App {
                             input.level,
                             |level| Message::SetInputVolume(level * 100.0),
                         )
+                        .on_release(Message::AdjustDone)
                         .on_icon_press(Some(Message::ToggleInputMute))
                         .dimmed(input.muted),
                     )
@@ -774,7 +777,8 @@ impl App {
             let chips = [1.0, 1.25, 1.5, 1.75, 2.0].map(|scale| -> Element<'_, Message> {
                 button::custom(
                     widget::container(widget::text::caption(format!("{:.0}%", scale * 100.0)))
-                        .center(Length::Fill),
+                        .center(Length::Fill)
+                        .class(inherit_colors()),
                 )
                 .height(Length::Fixed(28.0))
                 .width(Length::Fill)
@@ -1246,7 +1250,8 @@ impl App {
                 }))
                 .size(20),
             )
-            .center(Length::Fixed(40.0)),
+            .center(Length::Fixed(40.0))
+            .class(inherit_colors()),
         )
         .class(match color {
             Some(color) => play_class(color),
@@ -1623,6 +1628,7 @@ impl App {
                     volume.level,
                     |level| Message::SetVolume(level * 100.0),
                 )
+                .on_release(Message::AdjustDone)
                 .on_icon_press(Some(Message::ToggleMute))
                 .dimmed(volume.muted),
                 Message::ShowPage(Page::Sound),

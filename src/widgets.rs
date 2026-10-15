@@ -81,6 +81,47 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
     }
 }
 
+/// How bright a color looks, as WCAG measures it.
+fn luminance(color: Color) -> f32 {
+    let linear = |v: f32| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+}
+
+fn contrast(a: Color, b: Color) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// What reads on `background`: the theme's `on`, unless it hardly shows
+/// there, as its white on a white or light accent; then black or white,
+/// whichever shows more.
+pub fn readable(on: impl Into<Color>, background: impl Into<Color>) -> Color {
+    let (on, background) = (on.into(), background.into());
+    if contrast(on, background) >= 3.0 {
+        return on;
+    }
+    let dark = Color::from_rgb(0.08, 0.08, 0.08);
+    let light = Color::from_rgb(0.97, 0.97, 0.97);
+    if contrast(dark, background) >= contrast(light, background) {
+        dark
+    } else {
+        light
+    }
+}
+
+/// For a container inside a tile or a colored button: it keeps the colors
+/// they give, where COSMIC's plain one sets the panel's own, white on a
+/// light accent or on the media card's white play button.
+pub fn inherit_colors() -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(|_| cosmic::widget::container::Style::default())
+}
+
 /// The colors of a tile, off and on: background, hovered background, and
 /// what's on it.
 fn tile_colors(theme: &cosmic::Theme, on: bool) -> (Color, Color, Color) {
@@ -90,7 +131,11 @@ fn tile_colors(theme: &cosmic::Theme, on: bool) -> (Color, Color, Color) {
     } else {
         &cosmic.background(theme.transparent).component
     };
-    (component.base.into(), component.hover.into(), component.on.into())
+    (
+        component.base.into(),
+        component.hover.into(),
+        readable(component.on, component.base),
+    )
 }
 
 /// A tile's surface: lit when on, easing between off and on; a click (on
@@ -593,7 +638,8 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         let (lit, on): (Color, Color) = if self.dimmed {
             (component.pressed.into(), component.on.into())
         } else {
-            (cosmic.accent_button.base.into(), cosmic.accent_button.on.into())
+            let accent = &cosmic.accent_button;
+            (accent.base.into(), readable(accent.on, accent.base))
         };
         let width = bounds.height + (bounds.width - bounds.height) * self.value;
         renderer.fill_quad(
@@ -685,4 +731,20 @@ fn child(layout: Layout<'_>) -> Layout<'_> {
         .next()
         .expect("laid out with its content")
         .with_virtual_offset(layout.virtual_offset())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readable_on_any_accent() {
+        let white = Color::from_rgb(1.0, 1.0, 1.0);
+        // White on a white or light cyan accent: dark instead.
+        assert!(luminance(readable(white, white)) < 0.1);
+        assert!(luminance(readable(white, Color::from_rgb(0.58, 0.92, 0.92))) < 0.1);
+        // The theme's pick, where it shows.
+        let blue = Color::from_rgb(0.1, 0.3, 0.7);
+        assert_eq!(readable(white, blue), white);
+    }
 }
