@@ -18,6 +18,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tile {
     Wifi,
+    Vpn,
     Bluetooth,
     Power,
     DoNotDisturb,
@@ -37,8 +38,9 @@ pub enum Tile {
 }
 
 impl Tile {
-    pub const ALL: [Tile; 17] = [
+    pub const ALL: [Tile; 18] = [
         Tile::Wifi,
+        Tile::Vpn,
         Tile::Bluetooth,
         Tile::Power,
         Tile::DoNotDisturb,
@@ -70,6 +72,7 @@ impl Tile {
     pub fn id(self) -> &'static str {
         match self {
             Tile::Wifi => "wifi",
+            Tile::Vpn => "vpn",
             Tile::Bluetooth => "bluetooth",
             Tile::Power => "power",
             Tile::DoNotDisturb => "do-not-disturb",
@@ -106,6 +109,7 @@ impl Tile {
         let t = strings();
         match self {
             Tile::Wifi => t.wifi,
+            Tile::Vpn => t.vpn,
             Tile::Bluetooth => t.bluetooth,
             Tile::Power => t.power_mode,
             Tile::DoNotDisturb => t.do_not_disturb,
@@ -128,6 +132,7 @@ impl Tile {
     pub fn icon(self) -> &'static str {
         match self {
             Tile::Wifi => "network-wireless-signal-good-symbolic",
+            Tile::Vpn => "network-vpn-symbolic",
             Tile::Bluetooth => "bluetooth-active-symbolic",
             Tile::Power => "power-profile-balanced-symbolic",
             Tile::DoNotDisturb => "notification-disabled-symbolic",

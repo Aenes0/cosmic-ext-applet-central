@@ -266,6 +266,16 @@ pub fn subscription() -> Subscription<Vec<Media>> {
                     .interface("org.freedesktop.DBus.Properties")
                     .unwrap()
                     .build(),
+                // A jump in what's playing, which changes no property.
+                MatchRule::builder()
+                    .msg_type(zbus::message::Type::Signal)
+                    .path(PATH)
+                    .unwrap()
+                    .interface("org.mpris.MediaPlayer2.Player")
+                    .unwrap()
+                    .member("Seeked")
+                    .unwrap()
+                    .build(),
                 // Players come and go. Only theirs: all of the bus's would
                 // fill the queue and hold up the other signals.
                 MatchRule::builder()

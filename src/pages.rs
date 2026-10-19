@@ -428,6 +428,34 @@ impl App {
         )
     }
 
+    pub fn vpn_page(&self) -> Element<'_, Message> {
+        let t = strings();
+        let mut body = Vec::new();
+        if self.network.vpns.is_empty() {
+            body.push(note(t.no_vpn));
+        }
+        for (index, vpn) in self.network.vpns.iter().enumerate() {
+            let on = vpn.active.is_some();
+            body.push(
+                item(
+                    "network-vpn-symbolic",
+                    vpn.name.clone(),
+                    Some(if on { t.connected } else { t.disconnected }.to_owned()),
+                    on.then(check),
+                )
+                .on_press(Message::ConnectVpn(index))
+                .into(),
+            );
+        }
+        let on = self.network.vpns.iter().any(|vpn| vpn.active.is_some());
+        self.page(
+            t.vpn,
+            (!self.network.vpns.is_empty()).then_some((on, Message::ToggleVpn)),
+            body,
+            Some((t.more_vpn, "vpn")),
+        )
+    }
+
     pub fn bluetooth_page(&self) -> Element<'_, Message> {
         let t = strings();
         let mut body = Vec::new();
@@ -755,6 +783,7 @@ impl App {
                     Level::new(brightness_icon(), current as f32 / max.max(1) as f32, |level| {
                         Message::SetBrightness(level * 100.0)
                     })
+                    .on_release(Message::AdjustDone)
                     .into()
                 })
             } else {
@@ -1640,7 +1669,8 @@ impl App {
                     widget::icon::icon(icon("display-brightness-symbolic")).size(20),
                     current as f32 / max.max(1) as f32,
                     |level| Message::SetBrightness(level * 100.0),
-                ),
+                )
+                .on_release(Message::AdjustDone),
                 Message::ShowPage(Page::Displays),
             ));
         }
@@ -1683,6 +1713,32 @@ impl App {
                     self.network.wifi_enabled || wired,
                     Some(Message::ToggleWifi),
                     Some(Message::ShowPage(Page::Wifi)),
+                )
+            }
+            Tile::Vpn => {
+                let on: Vec<&str> = self
+                    .network
+                    .vpns
+                    .iter()
+                    .filter(|vpn| vpn.active.is_some())
+                    .map(|vpn| vpn.name.as_str())
+                    .collect();
+                let subtitle = match on.as_slice() {
+                    [] if self.network.vpns.is_empty() => t.no_vpn.to_owned(),
+                    [] => t.off.to_owned(),
+                    names => names.join(", "),
+                };
+                TileState::new(
+                    if on.is_empty() {
+                        "network-vpn-disabled-symbolic"
+                    } else {
+                        "network-vpn-symbolic"
+                    },
+                    t.vpn,
+                    Some(subtitle),
+                    !on.is_empty(),
+                    Some(Message::ToggleVpn),
+                    Some(Message::ShowPage(Page::Vpn)),
                 )
             }
             Tile::Bluetooth => {

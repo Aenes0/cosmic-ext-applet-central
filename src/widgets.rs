@@ -743,6 +743,9 @@ mod tests {
         // White on a white or light cyan accent: dark instead.
         assert!(luminance(readable(white, white)) < 0.1);
         assert!(luminance(readable(white, Color::from_rgb(0.58, 0.92, 0.92))) < 0.1);
+        // The cyan of #5, under the panel's light grey.
+        let grey = Color::from_rgb(0.78, 0.78, 0.78);
+        assert!(luminance(readable(grey, Color::from_rgb(0.39, 0.82, 0.87))) < 0.1);
         // The theme's pick, where it shows.
         let blue = Color::from_rgb(0.1, 0.3, 0.7);
         assert_eq!(readable(white, blue), white);

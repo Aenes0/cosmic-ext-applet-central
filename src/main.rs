@@ -5,6 +5,7 @@ mod audio;
 mod bar_spacing;
 mod host;
 mod i18n;
+mod latest;
 mod media;
 mod notifications;
 mod pages;

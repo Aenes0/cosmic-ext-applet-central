@@ -15,6 +15,8 @@ use cosmic::{
 use futures::{SinkExt, StreamExt, channel::mpsc};
 use tokio::{io::AsyncBufReadExt, process::Command};
 use tokio::sync::OnceCell;
+
+use crate::latest::Latest;
 use zbus::{
     MatchRule, MessageStream, fdo,
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
@@ -25,6 +27,17 @@ pub struct Network {
     pub wifi_enabled: bool,
     /// Name and kind of the connection in use: `802-11-wireless`, `802-3-ethernet`…
     pub connection: Option<(String, String)>,
+    /// The VPNs set up, WireGuard's too, the last used first.
+    pub vpns: Vec<Vpn>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Vpn {
+    /// Its saved connection.
+    pub path: OwnedObjectPath,
+    pub name: String,
+    /// The active connection, while on or connecting.
+    pub active: Option<OwnedObjectPath>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -246,6 +259,8 @@ trait NetworkManager {
     fn set_wireless_enabled(&self, enabled: bool) -> zbus::Result<()>;
     #[zbus(property)]
     fn primary_connection(&self) -> zbus::Result<OwnedObjectPath>;
+    #[zbus(property)]
+    fn active_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
 #[zbus::proxy(
@@ -257,6 +272,8 @@ trait ActiveConnection {
     fn id(&self) -> zbus::Result<String>;
     #[zbus(property, name = "Type")]
     fn kind(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn connection(&self) -> zbus::Result<OwnedObjectPath>;
 }
 
 async fn network(conn: &zbus::Connection) -> zbus::Result<Network> {
@@ -275,7 +292,47 @@ async fn network(conn: &zbus::Connection) -> zbus::Result<Network> {
     Ok(Network {
         wifi_enabled,
         connection,
+        vpns: vpns(conn, &nm).await.unwrap_or_default(),
     })
+}
+
+async fn vpns(conn: &zbus::Connection, nm: &NetworkManagerProxy<'_>) -> zbus::Result<Vec<Vpn>> {
+    // Saved connection to active one.
+    let mut active = HashMap::new();
+    for path in nm.active_connections().await? {
+        let proxy = ActiveConnectionProxy::builder(conn).path(path.clone())?.build().await?;
+        if let Ok(connection) = proxy.connection().await {
+            active.insert(connection, path);
+        }
+    }
+    let mut vpns = Vec::new();
+    for path in NmSettingsProxy::new(conn).await?.list_connections().await? {
+        let connection = NmConnectionProxy::builder(conn).path(path.clone())?.build().await?;
+        let Ok(settings) = connection.get_settings().await else {
+            continue;
+        };
+        let Some(about) = settings.get("connection") else {
+            continue;
+        };
+        let text = |key: &str| about.get(key).and_then(|v| String::try_from(v.clone()).ok());
+        if !matches!(text("type").as_deref(), Some("vpn" | "wireguard")) {
+            continue;
+        }
+        let used = about
+            .get("timestamp")
+            .and_then(|v| u64::try_from(v.clone()).ok())
+            .unwrap_or(0);
+        vpns.push((
+            used,
+            Vpn {
+                active: active.remove(&path),
+                name: text("id").unwrap_or_default(),
+                path,
+            },
+        ));
+    }
+    vpns.sort_by_key(|(used, vpn)| (std::cmp::Reverse(*used), vpn.name.clone()));
+    Ok(vpns.into_iter().map(|(_, vpn)| vpn).collect())
 }
 
 #[zbus::proxy(
@@ -285,6 +342,7 @@ async fn network(conn: &zbus::Connection) -> zbus::Result<Network> {
 )]
 trait NetworkManagerMethods {
     fn get_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+    fn deactivate_connection(&self, active: &ObjectPath<'_>) -> zbus::Result<()>;
     fn activate_connection(
         &self,
         connection: &ObjectPath<'_>,
@@ -471,6 +529,17 @@ pub async fn join_wifi(device: OwnedObjectPath, network: AccessPoint) -> zbus::R
     nm.add_and_activate_connection(HashMap::new(), &device, &network.path)
         .await?;
     Ok(Joined::Connecting)
+}
+
+/// Turns a VPN on, from its saved connection, or off, from its active one.
+pub async fn connect_vpn(vpn: Vpn) -> zbus::Result<()> {
+    let conn = zbus::Connection::system().await?;
+    let nm = NetworkManagerMethodsProxy::new(&conn).await?;
+    let none = ObjectPath::from_static_str_unchecked("/");
+    match &vpn.active {
+        Some(active) => nm.deactivate_connection(active).await,
+        None => nm.activate_connection(&vpn.path, &none, &none).await.map(|_| ()),
+    }
 }
 
 pub async fn set_wifi(enabled: bool) -> zbus::Result<()> {
@@ -756,12 +825,22 @@ async fn brightness(conn: &zbus::Connection) -> zbus::Result<Option<(i32, i32)>>
     Ok(Some((daemon.display_brightness().await?, max)))
 }
 
-pub async fn set_brightness(value: i32) -> zbus::Result<()> {
-    let conn = zbus::Connection::session().await?;
-    SettingsDaemonProxy::new(&conn)
-        .await?
-        .set_display_brightness(value)
-        .await
+pub async fn set_brightness(value: i32) {
+    static LATEST: Latest<(), i32> = Latest::new();
+    LATEST
+        .send((), value, |(), value| async move {
+            let set = async {
+                let conn = zbus::Connection::session().await?;
+                SettingsDaemonProxy::new(&conn)
+                    .await?
+                    .set_display_brightness(value)
+                    .await
+            };
+            if let Err(err) = set.await {
+                tracing::warn!("cannot set brightness: {err}");
+            }
+        })
+        .await;
 }
 
 const SINK: &str = "@DEFAULT_AUDIO_SINK@";
@@ -795,10 +874,15 @@ async fn get_volume(node: &str) -> Option<Volume> {
 }
 
 pub async fn set_volume(level: f32) {
-    let level = format!("{:.2}", level.clamp(0.0, 1.0));
-    _ = crate::host::command("wpctl", &[])
-        .args(["set-volume", SINK, &level])
-        .status()
+    static LATEST: Latest<(), f32> = Latest::new();
+    LATEST
+        .send((), level, |(), level| async move {
+            let level = format!("{:.2}", level.clamp(0.0, 1.0));
+            _ = crate::host::command("wpctl", &[])
+                .args(["set-volume", SINK, &level])
+                .status()
+                .await;
+        })
         .await;
 }
 

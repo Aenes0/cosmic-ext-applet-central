@@ -1,8 +1,10 @@
 [Desktop Entry]
 Name=Quick Settings
 Name[pt_BR]=Configurações rápidas
+Name[fr]=Réglages rapides
 Comment=Wi-Fi, Bluetooth, volume, brightness and more in one place, like the macOS Control Center
 Comment[pt_BR]=Wi-Fi, Bluetooth, volume, brilho e mais num lugar só, como a Central de Controle do macOS
+Comment[fr]=Wi-Fi, Bluetooth, volume, luminosité et plus au même endroit, comme le Centre de contrôle de macOS
 Type=Application
 Exec=@bindir@/cosmic-ext-applet-quick-settings
 Terminal=false

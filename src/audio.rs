@@ -10,7 +10,10 @@ use futures::{SinkExt, channel::mpsc};
 use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 
-use crate::services::{Volume, pactl};
+use crate::{
+    latest::Latest,
+    services::{Volume, pactl},
+};
 
 /// An app playing sound, all its streams together.
 #[derive(Clone, Debug, PartialEq)]
@@ -151,12 +154,18 @@ fn percent(level: f32) -> String {
 }
 
 pub async fn set_stream_volume(indices: Vec<u32>, level: f32) {
-    for index in indices {
-        _ = pactl()
-            .args(["set-sink-input-volume", &index.to_string(), &percent(level)])
-            .status()
-            .await;
-    }
+    // By app: one moved right after another still gets its last value.
+    static LATEST: Latest<Vec<u32>, f32> = Latest::new();
+    LATEST
+        .send(indices, level, |indices, level| async move {
+            for index in indices {
+                _ = pactl()
+                    .args(["set-sink-input-volume", &index.to_string(), &percent(level)])
+                    .status()
+                    .await;
+            }
+        })
+        .await;
 }
 
 pub async fn set_stream_mute(indices: Vec<u32>, muted: bool) {
@@ -174,9 +183,14 @@ pub async fn set_source(name: String) {
 }
 
 pub async fn set_input_volume(level: f32) {
-    _ = pactl()
-        .args(["set-source-volume", "@DEFAULT_SOURCE@", &percent(level)])
-        .status()
+    static LATEST: Latest<(), f32> = Latest::new();
+    LATEST
+        .send((), level, |(), level| async move {
+            _ = pactl()
+                .args(["set-source-volume", "@DEFAULT_SOURCE@", &percent(level)])
+                .status()
+                .await;
+        })
         .await;
 }
 

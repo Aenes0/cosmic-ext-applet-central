@@ -31,7 +31,7 @@ tempo restante, cada bloco ligado. Clicar abre:
   desliga o mudo (o slider fica cinza), e a seta ao lado abre a página;
 - blocos de Wi-Fi, Bluetooth (com a bateria do dispositivo conectado), Energia (alterna
   Economia/Equilibrado/Desempenho), Não perturbe, Tema escuro e Modo avião; dá para
-  adicionar Microfone mudo, Manter acordado, Lado a lado (tiling), Lupa, Inverter cores,
+  adicionar VPN (liga a última usada, ou desliga as que estão ligadas), Microfone mudo, Manter acordado, Lado a lado (tiling), Lupa, Inverter cores,
   Leitor de tela, Alto contraste, Captura de tela, Espaços de trabalho, Touchpad (liga e
   desliga o touchpad, sem mexer no resto da configuração dele) e Borda ativa (liga e desliga
   a [borda ativa](https://github.com/DrakRosmann/cosmic-ext-hot-edge); só aparece com ela
@@ -65,6 +65,8 @@ o Configurações no rodapé:
 
 - **Wi-Fi**: liga/desliga e lista as redes. Clicar numa rede salva ou aberta conecta; uma
   rede protegida nova abre o Configurações, que é quem pede a senha.
+- **VPN**: as VPNs e as conexões WireGuard salvas no NetworkManager, a última usada
+  primeiro; clicar liga ou desliga. Uma que pede senha abre o Configurações.
 - **Bluetooth**: liga/desliga e lista os dispositivos pareados, com a bateria dos
   conectados; clicar conecta ou desconecta.
 - **Energia**: a bateria do computador e de cada periférico, a opção de mostrar a
@@ -81,7 +83,8 @@ o Configurações no rodapé:
 
 As páginas entram deslizando (da direita ao entrar, da esquerda ao voltar), com fade. A
 altura muda de uma vez: redimensionar o popup a cada quadro derrubava o renderizador. O
-popup vai até quase a altura da tela; os controles ficam fixos e só as notificações rolam.
+popup fica sob o applet, rente à ponta dele (num canto da tela, quase encostado na
+borda), e vai até quase a altura da tela; os controles ficam fixos e só as notificações rolam.
 
 O lápis no topo abre a edição, como no Android: os blocos aparecem com "−" para tirar;
 arraste um bloco para outra posição (os outros abrem espaço enquanto ele passa); tocar
@@ -129,6 +132,8 @@ controla (NetworkManager, BlueZ, UPower, perfis de energia, MPRIS, notificaçõe
 configurações do COSMIC em `~/.config/cosmic`. Sem enxergar as câmeras de dentro da
 sandbox, ele pergunta ao sistema quem as usa a cada 5 segundos.
 
+O applet fala português, inglês e francês, conforme o idioma do sistema.
+
 Depois adicione **Configurações rápidas** em Configurações › Área de trabalho › Painel ›
 Applets. Ele não substitui os applets de rede, som, Bluetooth e bateria; dá para tirá-los
 se ficar repetido.
@@ -137,7 +142,7 @@ se ficar repetido.
 
 | Controle | Fonte |
 | --- | --- |
-| Wi-Fi, rede em uso | NetworkManager |
+| Wi-Fi, rede em uso, VPN | NetworkManager |
 | Bluetooth | BlueZ (primeiro adaptador) |
 | Bateria, periféricos | UPower; no Bluetooth, também a bateria que o BlueZ informa |
 | Energia | power-profiles-daemon (ou o tuned-ppd do Fedora) |

@@ -8,12 +8,14 @@
   </developer>
   <name>Quick Settings</name>
   <name xml:lang="pt-BR">Configurações rápidas</name>
+  <name xml:lang="fr">Réglages rapides</name>
   <summary>Wi-Fi, Bluetooth, sound, brightness, media and notifications in one panel applet</summary>
   <summary xml:lang="pt-BR">Wi-Fi, Bluetooth, som, brilho, mídia e notificações num applet do painel</summary>
+  <summary xml:lang="fr">Wi-Fi, Bluetooth, son, luminosité, médias et notifications dans une applet du panneau</summary>
   <description>
     <p>A control center for the COSMIC™ panel, like the ones on Android, macOS and GNOME.</p>
     <ul>
-      <li>Tiles for Wi-Fi, Bluetooth, power mode, do not disturb (for an hour, until tomorrow…), dark style, airplane mode, tiling, accessibility and more, which you can add, remove, resize and drag around</li>
+      <li>Tiles for Wi-Fi, VPN, Bluetooth, power mode, do not disturb (for an hour, until tomorrow…), dark style, airplane mode, tiling, accessibility and more, which you can add, remove, resize and drag around</li>
       <li>Volume and brightness sliders, the volume of each app, and the sound output and microphone to use</li>
       <li>What's playing, with its cover and controls, from any media player</li>
       <li>Notifications, grouped by app, with their buttons</li>

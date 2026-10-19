@@ -42,6 +42,7 @@ pub enum Page {
     Main,
     Edit,
     Wifi,
+    Vpn,
     Bluetooth,
     Power,
     Sound,
@@ -57,6 +58,7 @@ impl Page {
             "main" => Page::Main,
             "edit" => Page::Edit,
             "wifi" => Page::Wifi,
+            "vpn" => Page::Vpn,
             "bluetooth" => Page::Bluetooth,
             "power" => Page::Power,
             "sound" => Page::Sound,
@@ -110,6 +112,8 @@ pub enum Message {
     OpenHotEdge,
     /// A screen's name and height.
     Output(Option<String>, Option<i32>),
+    /// A window's new size: the panel button's, for the popup to line up with.
+    Resized(window::Id, iced::Size),
     ToggleShowPercentage,
     ToggleShowActive,
     SettingsChanged,
@@ -118,6 +122,10 @@ pub enum Message {
     /// Join the network at this index of the list.
     JoinWifi(usize),
     ConnectBluetooth(OwnedObjectPath, bool),
+    /// The last VPN used on, or those on off.
+    ToggleVpn,
+    /// A VPN, by index, on or off.
+    ConnectVpn(usize),
     Sinks(Option<(Vec<Sink>, String)>),
     SetSink(String),
     Displays(Vec<Display>),
@@ -255,9 +263,12 @@ pub struct App {
     pub(crate) bar_spacing: BarSpacing,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
-    /// When a volume slider last moved. What PipeWire tells meanwhile is
-    /// the slider's own change, from a moment before: it would pull the
-    /// slider back, and reload the list under it.
+    /// The panel button's size, all its icons.
+    button_size: Option<iced::Size>,
+    /// When a volume or brightness slider last moved. What PipeWire or the
+    /// settings daemon tell meanwhile is the slider's own change, from a
+    /// moment before: it would pull the slider back, and reload the list
+    /// under it.
     adjusting: Option<std::time::Instant>,
 }
 
@@ -439,6 +450,49 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
     })
 }
 
+/// The popup under the whole button, flush with its end, as the Control
+/// Center on macOS: by the screen's corner when the button is there. COSMIC
+/// puts it under the button's first icon, which on this wide button left it
+/// far from the corner.
+fn line_up(
+    positioner: &mut iced::platform_specific::runtime::wayland::popup::SctkPositioner,
+    panel: cosmic::applet::cosmic_panel_config::PanelAnchor,
+    button: iced::Size,
+) {
+    use cosmic::{
+        applet::cosmic_panel_config::PanelAnchor,
+        cctk::sctk::reexports::protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity},
+    };
+    positioner.anchor_rect.width = button.width.round() as i32;
+    positioner.anchor_rect.height = button.height.round() as i32;
+    // Its end along the panel; down the panel when it's at a side.
+    (positioner.anchor, positioner.gravity) = match panel {
+        PanelAnchor::Top => (Anchor::BottomRight, Gravity::BottomLeft),
+        PanelAnchor::Bottom => (Anchor::TopRight, Gravity::TopLeft),
+        PanelAnchor::Left => (Anchor::TopRight, Gravity::BottomRight),
+        PanelAnchor::Right => (Anchor::TopLeft, Gravity::BottomLeft),
+    };
+}
+
+/// A VPN on or off. One that won't come on, often for a password only
+/// COSMIC Settings asks for, opens its page there.
+fn connect_vpn(vpn: services::Vpn) -> app::Task<Message> {
+    let turning_on = vpn.active.is_none();
+    Task::future(async move {
+        match services::connect_vpn(vpn).await {
+            Err(err) if turning_on => {
+                tracing::warn!("cannot turn the VPN on: {err}");
+                cosmic::action::app(Message::Settings(Some("vpn")))
+            }
+            Err(err) => {
+                tracing::warn!("cannot turn the VPN off: {err}");
+                cosmic::action::app(Message::None)
+            }
+            Ok(()) => cosmic::action::app(Message::None),
+        }
+    })
+}
+
 fn popup_limits(max_height: f32) -> Limits {
     Limits::NONE
         .min_width(WIDTH)
@@ -519,6 +573,9 @@ impl cosmic::Application for App {
                                 .applet
                                 .get_popup_settings(parent, id, None, None, None);
                         settings.positioner.size_limits = popup_limits(app.max_height());
+                        if let Some(size) = app.button_size {
+                            line_up(&mut settings.positioner, app.core.applet.anchor, size);
+                        }
                         settings
                     },
                     None,
@@ -566,6 +623,7 @@ impl cosmic::Application for App {
                     }
                 }
                 Update::Peripherals(peripherals) => self.peripherals = peripherals,
+                Update::Brightness(_) if self.adjusting() => {}
                 Update::Brightness(brightness) => self.brightness = brightness,
                 Update::PowerProfiles(power) => self.power = power,
             },
@@ -594,9 +652,14 @@ impl cosmic::Application for App {
             }
             Message::SetBrightness(percent) => {
                 if let Some((current, max)) = self.brightness.as_mut() {
+                    self.adjusting = Some(std::time::Instant::now());
                     // Never all the way to black.
                     *current = ((percent / 100.0 * *max as f32) as i32).max(*max / 100).max(1);
-                    return run("set brightness", services::set_brightness(*current));
+                    let value = *current;
+                    return Task::future(async move {
+                        services::set_brightness(value).await;
+                        cosmic::action::app(Message::None)
+                    });
                 }
             }
             Message::ToggleWifi => {
@@ -645,6 +708,28 @@ impl cosmic::Application for App {
                     "connect Bluetooth device",
                     services::connect_bluetooth(device, connect),
                 );
+            }
+            Message::ToggleVpn => {
+                let on: Vec<_> = self
+                    .network
+                    .vpns
+                    .iter()
+                    .filter(|vpn| vpn.active.is_some())
+                    .cloned()
+                    .collect();
+                if on.is_empty() {
+                    return match self.network.vpns.first() {
+                        Some(vpn) => connect_vpn(vpn.clone()),
+                        // None set up yet: where they are.
+                        None => self.update(Message::Settings(Some("vpn"))),
+                    };
+                }
+                return Task::batch(on.into_iter().map(connect_vpn));
+            }
+            Message::ConnectVpn(index) => {
+                if let Some(vpn) = self.network.vpns.get(index) {
+                    return connect_vpn(vpn.clone());
+                }
             }
             Message::NextPowerProfile => {
                 if let Some(power) = &self.power {
@@ -717,6 +802,11 @@ impl cosmic::Application for App {
                     || (panel.is_empty() || panel == "all") && self.screen_height.is_none()
                 {
                     self.screen_height = height;
+                }
+            }
+            Message::Resized(id, size) => {
+                if Some(id) == self.core.main_window_id() {
+                    self.button_size = Some(size);
                 }
             }
             Message::ToggleTouchpad => {
@@ -858,7 +948,19 @@ impl cosmic::Application for App {
                 spawn("cosmic-workspaces", &[]);
                 return self.close_popup();
             }
-            Message::Media(media) => {
+            Message::Media(mut media) => {
+                // Browsers leave the length out of what they tell for a moment
+                // while seeking, and may say nothing more after: the progress
+                // bar went with it until playback paused or resumed.
+                for m in media.iter_mut().filter(|m| m.length <= 0) {
+                    if let Some(old) = self
+                        .media
+                        .iter()
+                        .find(|old| old.service == m.service && old.title == m.title)
+                    {
+                        m.length = old.length;
+                    }
+                }
                 // A player starting to play comes forward, as on a phone.
                 let started = media.iter().find(|m| {
                     m.playing
@@ -1217,6 +1319,7 @@ impl cosmic::Application for App {
                 _ => None,
             }
         }));
+        subscriptions.push(window::resize_events().map(|(id, size)| Message::Resized(id, size)));
         if self.drag.is_some() {
             // Let go anywhere, on a tile or not.
             subscriptions.push(event::listen_with(|event, _, _| match event {
@@ -1412,6 +1515,7 @@ impl cosmic::Application for App {
             Page::Main => self.main_page(),
             Page::Edit => pages::panel(self.edit_page()),
             Page::Wifi => pages::panel(self.wifi_page()),
+            Page::Vpn => pages::panel(self.vpn_page()),
             Page::Bluetooth => pages::panel(self.bluetooth_page()),
             Page::Power => pages::panel(self.power_page()),
             Page::Sound => pages::panel(self.sound_page()),
