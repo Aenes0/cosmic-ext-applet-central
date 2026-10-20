@@ -32,7 +32,8 @@ use crate::{
     transition::Transition,
 };
 
-pub const WIDTH: f32 = 480.0;
+/// Five columns of the grid, the gaps between them, and the panel's padding.
+pub const WIDTH: f32 = 404.0;
 /// The popup grows with what it shows up to this, until the screen's height
 /// is known; past it the notifications scroll.
 pub const MAX_HEIGHT: f32 = 800.0;

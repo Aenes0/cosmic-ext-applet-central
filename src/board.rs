@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The popup's main page as One UI draws its quick panel: everything on one
-//! grid of six columns — tiles as icons, short pills or pills, the sliders
+//! grid of five columns — tiles as icons, short pills or pills, the sliders
 //! standing or across, what's playing — and edited in place: the grid stays,
 //! each item gets a "−", a tap picks it to resize, and what can be added
 //! shows under it.

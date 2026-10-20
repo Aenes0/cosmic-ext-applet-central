@@ -208,7 +208,7 @@ impl Kind {
     }
 }
 
-/// How an item sits on the grid of six columns.
+/// How an item sits on the grid of five columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fit {
     /// A round icon, a column.
@@ -268,9 +268,9 @@ impl Fit {
     }
 }
 
-/// The popup's grid: six columns, so that a row holds six icons, three short
-/// pills or two pills.
-pub const COLUMNS: u16 = 6;
+/// The popup's grid: five columns, so that a row holds five icons, or a pill
+/// and a short pill.
+pub const COLUMNS: u16 = 5;
 
 /// An item on the grid, and its size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -641,11 +641,11 @@ mod tests {
     #[test]
     fn packs_into_gaps() {
         // Two vertical sliders beside a pill fill its row and the next.
-        let cells = pack(&[(1, 2), (1, 2), (3, 1), (1, 1), (6, 1)]);
+        let cells = pack(&[(1, 2), (1, 2), (3, 1), (1, 1), (5, 1)]);
         assert_eq!((cells[0].column, cells[0].row), (0, 0));
         assert_eq!((cells[1].column, cells[1].row), (1, 0));
         assert_eq!((cells[2].column, cells[2].row), (2, 0));
-        assert_eq!((cells[3].column, cells[3].row), (5, 0));
+        assert_eq!((cells[3].column, cells[3].row), (2, 1));
         assert_eq!((cells[4].column, cells[4].row), (0, 2));
     }
 
