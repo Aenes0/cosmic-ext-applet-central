@@ -101,13 +101,12 @@ pub enum Message {
     /// When an icon shows on the bar.
     SetBarIcon(BarItem, Show),
     ToggleFold(Section),
-    /// An item of the grid, by index, and its new size.
-    SetFit(usize, Fit),
     /// An item's resize handle dragged this far across since pressed; let go.
     ResizeDrag(usize, f32),
     ResizeEnd,
     /// While editing: the bubble whose "+" was pressed, where adding goes.
     AddTarget(usize),
+    CloseAdding,
     /// Keeps the arrangement edited, or goes back to how it was.
     SaveEdit,
     CancelEdit,
@@ -194,7 +193,6 @@ pub enum Message {
     /// Scrolling over the volume or battery icon, in steps.
     ScrollVolume(f32),
     ScrollBrightness(f32),
-    Surface(cosmic::surface::Action),
     Suspend,
     Restart,
     LogOut,
@@ -288,6 +286,8 @@ pub struct App {
     before_edit: Option<Vec<Placed>>,
     /// The bubble the sidebar adds to.
     pub(crate) add_target: usize,
+    /// While editing, whether the floating panel of what can be added shows.
+    pub(crate) adding: bool,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
     /// The panel button's size, all its icons.
@@ -576,8 +576,7 @@ fn connect_vpn(vpn: services::Vpn) -> app::Task<Message> {
 fn popup_limits(max_height: f32) -> Limits {
     Limits::NONE
         .min_width(WIDTH)
-        // Wider while editing, with the sidebar at the left.
-        .max_width(WIDTH + crate::board::SIDEBAR + pages::PANEL_GAP)
+        .max_width(WIDTH)
         .min_height(1.0)
         .max_height(max_height)
 }
@@ -595,8 +594,11 @@ impl cosmic::Application for App {
         let selected_tile = std::env::var("COSMIC_QS_PREVIEW_SELECT")
             .ok()
             .and_then(|i| i.parse().ok());
+        // COSMIC_QS_PREVIEW_ADDING=1 shows what can be added, while editing.
+        let adding = std::env::var("COSMIC_QS_PREVIEW_ADDING").is_ok_and(|v| v == "1");
         let app = Self {
             core,
+            adding,
             selected_tile,
             tiles,
             do_not_disturb: DO_NOT_DISTURB.get(),
@@ -691,14 +693,6 @@ impl cosmic::Application for App {
             }
             Message::SetBarIcon(item, show) => self.panel_icons.set(item, show),
             Message::ToggleFold(section) => self.layout.toggle_fold(section),
-            Message::SetFit(index, fit) => {
-                if let Some(placed) = self.tiles.get_mut(index)
-                    && placed.kind.fits().contains(&fit)
-                {
-                    placed.fit = fit;
-                    self.save_tiles();
-                }
-            }
             Message::ResizeDrag(index, dx) => {
                 let Some(placed) = self.tiles.get(index).copied() else {
                     return Task::none();
@@ -763,6 +757,7 @@ impl cosmic::Application for App {
                 if page == Page::Edit && self.page != Some(Page::Edit) {
                     self.before_edit = Some(self.tiles.clone());
                     self.add_target = 0;
+                    self.adding = false;
                 } else if page != Page::Edit && self.page == Some(Page::Edit) {
                     // Away from editing without saving: as it was.
                     self.leave_edit(false);
@@ -771,7 +766,12 @@ impl cosmic::Application for App {
                 self.selected_tile = None;
                 return self.load(page);
             }
-            Message::AddTarget(bubble) => self.add_target = bubble,
+            Message::AddTarget(bubble) => {
+                // The same "+" again closes it.
+                self.adding = !(self.adding && self.add_target == bubble);
+                self.add_target = bubble;
+            }
+            Message::CloseAdding => self.adding = false,
             Message::SaveEdit => {
                 self.leave_edit(true);
                 self.page = Some(Page::Main);
@@ -1476,9 +1476,6 @@ impl cosmic::Application for App {
                     return self.update(Message::SetBrightness(percent));
                 }
             }
-            Message::Surface(action) => {
-                return cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(action)));
-            }
             Message::None => {}
         }
         Task::none()
@@ -1549,11 +1546,10 @@ impl cosmic::Application for App {
                 .into()
         };
         let panel_icon = |name: &str| colored(name, None);
-        // Each icon with what it means on hover.
-        let tip = |content: Element<'static, Message>, text: String| -> Element<'static, Message> {
-            applet
-                .applet_tooltip(content, text, self.popup.is_some(), Message::Surface, None)
-                .into()
+        // No tooltips on the bar: COSMIC's float over it and swallow the
+        // click under them; what each icon means is in the popup.
+        let tip = |content: Element<'static, Message>, _text: String| -> Element<'static, Message> {
+            content
         };
         // On a panel at a side of the screen, the icons go in a column, and
         // what an icon says goes under it, smaller, to fit the panel's width.
@@ -1742,14 +1738,7 @@ impl cosmic::Application for App {
         let page = self.page.unwrap_or(Page::Main);
         let content = match page {
             Page::Main => self.main_page(),
-            Page::Edit => widget::row::with_children(vec![
-                widget::container(self.edit_sidebar())
-                    .width(Length::Fixed(crate::board::SIDEBAR))
-                    .into(),
-                widget::container(self.edit_page()).width(Length::Fixed(WIDTH)).into(),
-            ])
-            .spacing(pages::PANEL_GAP)
-            .into(),
+            Page::Edit => self.edit_page(),
             Page::Wifi => pages::panel(self.wifi_page()),
             Page::Vpn => pages::panel(self.vpn_page()),
             Page::Bluetooth => pages::panel(self.bluetooth_page()),
@@ -1762,12 +1751,8 @@ impl cosmic::Application for App {
         };
         // Editing is the main page in place: it fades, the others slide.
         let depth = if matches!(page, Page::Main | Page::Edit) { 0 } else { 1 };
-        // As wide as the panel; editing, the sidebar too.
-        let content: Element<'_, Message> = if page == Page::Edit {
-            content
-        } else {
-            widget::container(content).width(Length::Fixed(WIDTH)).into()
-        };
+        let content: Element<'_, Message> =
+            widget::container(content).width(Length::Fixed(WIDTH)).into();
         // The pages draw their own panels, apart, instead of the applet's
         // popup, all one: as applets' popups are sized.
         cosmic::widget::autosize::autosize(

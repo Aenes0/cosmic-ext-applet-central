@@ -241,17 +241,6 @@ impl Fit {
             .find(|f| f.id() == id)
     }
 
-    pub fn name(self) -> &'static str {
-        let t = crate::texts::texts();
-        match self {
-            Fit::Icon => t.fit_icon,
-            Fit::Short => t.fit_short,
-            Fit::Pill => t.fit_pill,
-            Fit::Vertical => t.fit_vertical,
-            Fit::Horizontal => t.fit_horizontal,
-        }
-    }
-
     /// Columns and rows it takes.
     pub fn span(self) -> (u16, u16) {
         match self {
