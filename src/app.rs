@@ -18,12 +18,13 @@ use crate::{
     audio::{self, Mixer, Privacy},
     bar_spacing::BarSpacing,
     i18n::strings,
+    layout::{self, BarItem, Layout, PanelIcons, Section, Show},
     workspaces,
     media::{self, Control, Media},
     notifications::{self, Notification},
     services::{
         self, Battery, Bluetooth, DARK_MODE, DO_NOT_DISTURB, Joined, Network, PowerProfiles,
-        HIDE_ACTIVE, SHOW_PERCENTAGE,
+        SHOW_PERCENTAGE,
         Display, Peripheral, Sink, Update, Volume, WifiNetworks,
     },
     tiles::{Placed, Tile, icon, symbolic},
@@ -91,6 +92,16 @@ pub enum Message {
     TogglePopup,
     /// Opens the popup on a page by itself, for screenshots.
     Preview(Page),
+    /// A right click on an icon of the bar: the popup, open on its page.
+    OpenAt(Page),
+    /// When an icon shows on the bar.
+    SetBarIcon(BarItem, Show),
+    /// A section of the popup one place up or down.
+    ShiftSection(Section, isize),
+    ToggleFold(Section),
+    ResetLayout,
+    /// The monitor the main brightness slider sets, by connector.
+    SetPrimaryDisplay(String),
     Closed(window::Id),
     ShowPage(Page),
     Update(Update),
@@ -115,7 +126,6 @@ pub enum Message {
     /// A window's new size: the panel button's, for the popup to line up with.
     Resized(window::Id, iced::Size),
     ToggleShowPercentage,
-    ToggleShowActive,
     SettingsChanged,
     Inhibited(Option<u32>),
     WifiNetworks(Option<WifiNetworks>),
@@ -255,12 +265,14 @@ pub struct App {
     pub(crate) do_not_disturb: bool,
     pub(crate) dark_mode: bool,
     pub(crate) show_percentage: bool,
-    pub(crate) show_active: bool,
     /// Held while keeping the computer awake.
     pub(crate) inhibit: Option<u32>,
     pub(crate) touchpad: Option<services::Touchpad>,
     pub(crate) hot_edge: bool,
     pub(crate) bar_spacing: BarSpacing,
+    pub(crate) panel_icons: PanelIcons,
+    pub(crate) layout: Layout,
+    pub(crate) primary_display: Option<String>,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
     /// The panel button's size, all its icons.
@@ -518,18 +530,25 @@ impl cosmic::Application for App {
             dark_mode: DARK_MODE.get(),
             tiling_config: services::tiling_config(),
             show_percentage: SHOW_PERCENTAGE.get(),
-            show_active: !HIDE_ACTIVE.get(),
             notifications: notifications::load(),
             dnd_until: services::dnd_until(),
             touchpad: services::touchpad(),
             hot_edge: services::hot_edge(),
             bar_spacing: BarSpacing::load(),
+            panel_icons: PanelIcons::load(),
+            layout: Layout::load(),
+            primary_display: layout::primary_display(),
             ..Self::default()
         };
         // COSMIC_QS_PREVIEW=sound opens the popup on that page by itself, to
         // take screenshots without clicking the panel.
+        // COSMIC_QS_PREVIEW_OUTPUT=DP-3 keeps it to the panel on that screen.
+        let on_output = std::env::var("COSMIC_QS_PREVIEW_OUTPUT").map_or(true, |output| {
+            std::env::var("COSMIC_PANEL_OUTPUT").is_ok_and(|panel| panel == output)
+        });
         let preview = std::env::var("COSMIC_QS_PREVIEW")
             .ok()
+            .filter(|_| on_output)
             .and_then(|name| Page::from_name(&name));
         let task = match preview {
             Some(page) => Task::future(async move {
@@ -538,7 +557,11 @@ impl cosmic::Application for App {
             }),
             None => Task::none(),
         };
-        (app, task)
+        // The monitors early: the main slider sets the main one's brightness.
+        let displays = Task::future(async {
+            cosmic::action::app(Message::Displays(services::displays().await))
+        });
+        (app, Task::batch([task, displays]))
     }
 
     fn core(&self) -> &app::Core {
@@ -585,6 +608,20 @@ impl cosmic::Application for App {
                 let open = self.update(Message::TogglePopup);
                 self.page = Some(page);
                 return Task::batch([open, self.load(page)]);
+            }
+            Message::OpenAt(page) => {
+                if self.popup.is_some() {
+                    return self.update(Message::ShowPage(page));
+                }
+                return self.update(Message::Preview(page));
+            }
+            Message::SetBarIcon(item, show) => self.panel_icons.set(item, show),
+            Message::ShiftSection(section, by) => self.layout.shift(section, by),
+            Message::ToggleFold(section) => self.layout.toggle_fold(section),
+            Message::ResetLayout => self.layout.reset(),
+            Message::SetPrimaryDisplay(name) => {
+                layout::set_primary_display(&name);
+                self.primary_display = Some(name);
             }
             Message::Closed(id) => {
                 if self.popup == Some(id) {
@@ -850,10 +887,6 @@ impl cosmic::Application for App {
                 self.tiling_config = services::tiling_config();
                 self.touchpad = services::touchpad();
                 self.hot_edge = services::hot_edge();
-            }
-            Message::ToggleShowActive => {
-                self.show_active = !self.show_active;
-                HIDE_ACTIVE.set(!self.show_active);
             }
             Message::ToggleShowPercentage => {
                 self.show_percentage = !self.show_percentage;
@@ -1389,56 +1422,89 @@ impl cosmic::Application for App {
         };
 
         let mut icons: Vec<Element<'_, Message>> = Vec::with_capacity(10);
+        let shows = |item: BarItem| self.panel_icons.get(item);
+        // A right click opens the popup right on the icon's page.
+        let at = |content: Element<'static, Message>, page: Page| -> Element<'static, Message> {
+            widget::mouse_area(content).on_right_press(Message::OpenAt(page)).into()
+        };
         // Who is listening or watching, in the colors phones use.
         let privacy = &self.privacy;
-        if !privacy.camera.is_empty() {
-            let green: fn(&cosmic::Theme) -> iced::Color =
-                |theme| theme.cosmic().success_color().into();
-            icons.push(tip(
-                colored("camera-web-symbolic", Some(green)),
-                format!("{} · {}", privacy.camera.join(", "), t.using_camera),
-            ));
-        }
-        if !privacy.microphone.is_empty() {
-            let orange: fn(&cosmic::Theme) -> iced::Color =
-                |theme| theme.cosmic().warning_color().into();
-            icons.push(tip(
-                colored("audio-input-microphone-symbolic", Some(orange)),
-                format!("{} · {}", privacy.microphone.join(", "), t.using_microphone),
-            ));
+        if shows(BarItem::Privacy) != Show::Never {
+            if !privacy.camera.is_empty() {
+                let green: fn(&cosmic::Theme) -> iced::Color =
+                    |theme| theme.cosmic().success_color().into();
+                icons.push(tip(
+                    colored("camera-web-symbolic", Some(green)),
+                    format!("{} · {}", privacy.camera.join(", "), t.using_camera),
+                ));
+            }
+            if !privacy.microphone.is_empty() {
+                let orange: fn(&cosmic::Theme) -> iced::Color =
+                    |theme| theme.cosmic().warning_color().into();
+                icons.push(at(
+                    tip(
+                        colored("audio-input-microphone-symbolic", Some(orange)),
+                        format!("{} · {}", privacy.microphone.join(", "), t.using_microphone),
+                    ),
+                    Page::Sound,
+                ));
+            }
         }
         // Notifications: a bell, lit with how many are new.
-        if !self.notifications.is_empty() {
-            let new = self.new_count();
+        let new = self.new_count();
+        let bell = match shows(BarItem::Notifications) {
+            Show::Always => true,
+            Show::Active => new > 0,
+            Show::Never => false,
+        };
+        if bell {
             if new == 0 {
-                icons.push(tip(
-                    panel_icon("notification-symbolic"),
-                    format!("{} {}", self.notifications.len(), t.notifications.to_lowercase()),
+                icons.push(at(
+                    tip(
+                        panel_icon("notification-symbolic"),
+                        format!("{} {}", self.notifications.len(), t.notifications.to_lowercase()),
+                    ),
+                    Page::Main,
                 ));
             } else {
                 let accent: fn(&cosmic::Theme) -> iced::Color =
                     |theme| theme.cosmic().accent_color().into();
-                icons.push(tip(
-                    with_text(colored("notification-new-symbolic", Some(accent)), new.to_string(), true),
-                    format!(
-                        "{new} {}",
-                        if new == 1 { t.new_notification } else { t.new_notifications }
+                icons.push(at(
+                    tip(
+                        with_text(colored("notification-new-symbolic", Some(accent)), new.to_string(), true),
+                        format!(
+                            "{new} {}",
+                            if new == 1 { t.new_notification } else { t.new_notifications }
+                        ),
                     ),
+                    Page::Main,
                 ));
             }
         }
-        if self.show_active {
-            for (name, title) in self.active_tiles() {
-                icons.push(tip(panel_icon(name), title));
-            }
+        for (tile, state) in self.bar_tiles() {
+            let page = match tile {
+                Tile::Bluetooth => Page::Bluetooth,
+                Tile::Vpn => Page::Vpn,
+                Tile::Power => Page::Power,
+                Tile::DoNotDisturb => Page::DoNotDisturb,
+                Tile::Tiling => Page::Tiling,
+                _ => Page::Main,
+            };
+            let text = match &state.subtitle {
+                Some(subtitle) => format!("{} · {subtitle}", state.title),
+                None => state.title.to_owned(),
+            };
+            icons.push(at(tip(panel_icon(state.icon), text), page));
         }
-        let network = match &self.network.connection {
-            Some((name, _)) => name.clone(),
-            None if self.airplane_mode() => t.airplane_mode.to_owned(),
-            None => t.disconnected.to_owned(),
-        };
-        icons.push(tip(panel_icon(self.network_icon()), network));
-        if let Some(volume) = &self.volume {
+        if shows(BarItem::Network) != Show::Never {
+            let network = match &self.network.connection {
+                Some((name, _)) => name.clone(),
+                None if self.airplane_mode() => t.airplane_mode.to_owned(),
+                None => t.disconnected.to_owned(),
+            };
+            icons.push(at(tip(panel_icon(self.network_icon()), network), Page::Wifi));
+        }
+        if let Some(volume) = self.volume.as_ref().filter(|_| shows(BarItem::Volume) != Show::Never) {
             let text = if volume.muted {
                 format!("{}: {}", t.volume, t.muted)
             } else {
@@ -1448,24 +1514,30 @@ impl cosmic::Application for App {
             // area takes the left button too, so it opens the popup itself.
             let area = widget::mouse_area(panel_icon(self.volume_icon()))
                 .on_press(Message::TogglePopup)
+                .on_right_press(Message::OpenAt(Page::Sound))
                 .on_scroll(|delta| Message::ScrollVolume(scroll_steps(delta)))
                 .on_middle_press(Message::ToggleMute);
             icons.push(tip(area.into(), text));
         }
         // Each mouse, keyboard, headset… with its charge.
-        for peripheral in &self.peripherals {
-            icons.push(tip(
-                with_text(
-                    panel_icon(&peripheral.icon),
-                    format!("{:.0}%", peripheral.percentage),
-                    false,
-                ),
-                format!("{}: {:.0}%", peripheral.name, peripheral.percentage),
-            ));
+        if shows(BarItem::Peripherals) != Show::Never {
+            for peripheral in &self.peripherals {
+                icons.push(at(
+                    tip(
+                        with_text(
+                            panel_icon(&peripheral.icon),
+                            format!("{:.0}%", peripheral.percentage),
+                            false,
+                        ),
+                        format!("{}: {:.0}%", peripheral.name, peripheral.percentage),
+                    ),
+                    Page::Power,
+                ));
+            }
         }
         // The computer's battery last, by the screen's edge; scrolling on it
         // sets the screen's brightness.
-        if let Some(battery) = &self.battery {
+        if let Some(battery) = self.battery.as_ref().filter(|_| shows(BarItem::Battery) != Show::Never) {
             let icon = panel_icon(&symbolic(&battery.icon));
             let content = if self.show_percentage {
                 with_text(icon, format!("{:.0}%", battery.percentage), false)
@@ -1485,6 +1557,7 @@ impl cosmic::Application for App {
             }
             let area = widget::mouse_area(content)
                 .on_press(Message::TogglePopup)
+                .on_right_press(Message::OpenAt(Page::Power))
                 .on_scroll(|delta| Message::ScrollBrightness(scroll_steps(delta)));
             icons.push(tip(area.into(), text));
         }

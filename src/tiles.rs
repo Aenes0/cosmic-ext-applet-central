@@ -15,7 +15,7 @@ use crate::{
     widgets::{Surface, inherit_colors, readable, tile_radius},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tile {
     Wifi,
     Vpn,

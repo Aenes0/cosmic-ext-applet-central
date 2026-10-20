@@ -731,6 +731,22 @@ impl App {
             body.push(note(t.loading));
             return self.page(t.displays, None, body, Some((t.more_displays, "displays")));
         };
+        // The main monitor's brightness is the main page's slider.
+        let tx = crate::texts::texts();
+        let primary = self.primary_display_index();
+        let main_badge = |index: usize, display: &services::Display| -> Element<'_, Message> {
+            if !display.enabled || display.ddc.is_none() {
+                return widget::space::horizontal().width(Length::Shrink).into();
+            }
+            if primary == Some(index) {
+                return widget::text::caption(tx.main_display).class(theme::Text::Accent).into();
+            }
+            button::custom(widget::text::caption(tx.set_main))
+                .padding([4, 10])
+                .class(chip_class(false))
+                .on_press(Message::SetPrimaryDisplay(display.name.clone()))
+                .into()
+        };
         for (index, display) in displays.iter().enumerate() {
             if index > 0 {
                 body.push(padded_control(widget::divider::horizontal::default()).into());
@@ -765,7 +781,9 @@ impl App {
                             widget::text::body(title).font(cosmic::font::semibold()).into(),
                             widget::text::caption(subtitle).into(),
                         ])
+                        .width(Length::Fill)
                         .into(),
+                        main_badge(index, display),
                     ])
                     .spacing(spacing.space_s)
                     .align_y(Alignment::Center),
@@ -1076,16 +1094,8 @@ impl App {
             column = column.push(grid(chips, 104.0));
         }
 
-        column = column.push(
-            widget::row::with_children(vec![
-                widget::text::body(t.show_active).width(Length::Fill).into(),
-                widget::toggler(self.show_active)
-                    .on_toggle(|_| Message::ToggleShowActive)
-                    .into(),
-            ])
-            .padding([0, spacing.space_xxs])
-            .align_y(Alignment::Center),
-        );
+        column = column.push(self.bar_icons_editor());
+        column = column.push(self.sections_editor());
 
         // Further apart on a big screen.
         let choices = BarSpacing::ALL.map(|choice| -> Element<'_, Message> {
@@ -1136,24 +1146,181 @@ impl App {
         widget::scrollable(column.padding(spacing.space_s)).height(Length::Shrink).into()
     }
 
-    /// Two panels, apart, as Android's shade: the controls, and under them
-    /// the notifications, which get what the controls leave: the controls
-    /// stay put and only the notifications scroll.
-    pub fn main_page(&self) -> Element<'_, Message> {
+    /// When each icon shows on the bar: chips for always, while on, never.
+    fn bar_icons_editor(&self) -> Element<'_, Message> {
+        use crate::layout::BarItem;
+        let tx = crate::texts::texts();
         let spacing = theme::spacing();
-        let mut sections = vec![self.header()];
-        sections.extend(self.privacy_banner());
-        sections.extend([self.sliders(), self.tiles()]);
-        sections.extend(self.media_card());
-        let controls = panel(
-            widget::column::with_children(sections)
-                .spacing(spacing.space_s)
-                .padding(spacing.space_s),
-        );
+        let mut column = widget::column::with_capacity(16)
+            .push(widget::text::heading(tx.bar_icons))
+            .push(widget::text::caption(tx.bar_icons_hint).class(theme::Text::Custom(dimmed)))
+            .spacing(spacing.space_xxs);
+        for item in BarItem::all() {
+            let current = self.panel_icons.get(item);
+            let chips: Vec<Element<'_, Message>> = item
+                .choices()
+                .iter()
+                .map(|&show| {
+                    button::custom(
+                        widget::container(widget::text::caption(show.name()))
+                            .center(Length::Fill)
+                            .class(inherit_colors()),
+                    )
+                    .height(Length::Fixed(28.0))
+                    .width(Length::Fill)
+                    .class(chip_class(current == show))
+                    .on_press(Message::SetBarIcon(item, show))
+                    .into()
+                })
+                .collect();
+            column = column.push(
+                widget::row::with_children(vec![
+                    widget::icon::icon(icon(item.icon())).size(16).into(),
+                    widget::text::body(item.name())
+                        .ellipsize(iced::core::text::Ellipsize::End(
+                            iced::core::text::EllipsizeHeightLimit::Lines(1),
+                        ))
+                        .width(Length::Fill)
+                        .into(),
+                    widget::row::with_children(chips)
+                        .spacing(spacing.space_xxs)
+                        .width(Length::Fixed(222.0))
+                        .into(),
+                ])
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center),
+            );
+        }
+        column.padding([0, spacing.space_xxs]).into()
+    }
+
+    /// The popup's sections, each with a way up and down.
+    fn sections_editor(&self) -> Element<'_, Message> {
+        let t = strings();
+        let tx = crate::texts::texts();
+        let spacing = theme::spacing();
+        let last = self.layout.order.len().saturating_sub(1);
+        let mut column = widget::column::with_capacity(8)
+            .push(
+                widget::row::with_children(vec![
+                    widget::text::heading(tx.sections).width(Length::Fill).into(),
+                    widget::tooltip(
+                        button::icon(icon("edit-undo-symbolic"))
+                            .padding(6)
+                            .class(chip_class(false))
+                            .on_press(Message::ResetLayout),
+                        widget::text::body(t.reset),
+                        widget::tooltip::Position::Bottom,
+                    )
+                    .into(),
+                ])
+                .align_y(Alignment::Center),
+            )
+            .push(widget::text::caption(tx.sections_hint).class(theme::Text::Custom(dimmed)))
+            .spacing(spacing.space_xxs);
+        for (index, section) in self.layout.order.iter().copied().enumerate() {
+            let shift = |icon_name: &str, label: &'static str, by: isize, enabled: bool| -> Element<'_, Message> {
+                widget::tooltip(
+                    button::icon(icon(icon_name))
+                        .padding(6)
+                        .class(chip_class(false))
+                        .on_press_maybe(enabled.then_some(Message::ShiftSection(section, by))),
+                    widget::text::body(label),
+                    widget::tooltip::Position::Bottom,
+                )
+                .into()
+            };
+            column = column.push(
+                widget::row::with_children(vec![
+                    widget::icon::icon(icon(section.icon())).size(16).into(),
+                    widget::text::body(section.name()).width(Length::Fill).into(),
+                    shift("go-up-symbolic", tx.up, -1, index > 0),
+                    shift("go-down-symbolic", tx.down, 1, index < last),
+                ])
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center),
+            );
+        }
+        column.padding([0, spacing.space_xxs]).into()
+    }
+
+    /// Panels, apart, as Android's shade: the controls in the order picked,
+    /// and the notifications, which get what the controls leave: the
+    /// controls stay put and only the notifications scroll.
+    pub fn main_page(&self) -> Element<'_, Message> {
+        use crate::layout::Section;
+        let mut panels: Vec<Element<'_, Message>> = Vec::new();
+        let mut controls: Vec<Element<'_, Message>> = vec![self.header()];
+        controls.extend(self.privacy_banner());
+        fn flush<'a>(controls: &mut Vec<Element<'a, Message>>, panels: &mut Vec<Element<'a, Message>>) {
+            let spacing = theme::spacing();
+            if !controls.is_empty() {
+                panels.push(panel(
+                    widget::column::with_children(std::mem::take(controls))
+                        .spacing(spacing.space_s)
+                        .padding(spacing.space_s),
+                ));
+            }
+        }
+        for section in self.layout.order.iter().copied() {
+            match section {
+                Section::Volume => controls.extend(self.volume_slider()),
+                Section::Brightness => controls.extend(self.brightness_slider()),
+                Section::Tiles => controls.push(self.tiles()),
+                Section::Media => {
+                    if let Some(card) = self.media_card() {
+                        controls.push(self.fold_header(section, section.name().to_owned(), None));
+                        if !self.layout.folded.contains(&section) {
+                            controls.push(card);
+                        }
+                    }
+                }
+                Section::Notifications => {
+                    flush(&mut controls, &mut panels);
+                    panels.push(panel(self.notifications_panel()));
+                }
+            }
+        }
+        flush(&mut controls, &mut panels);
         // As tall as the popup's limits let it be, from the screen's height.
-        widget::column::with_children(vec![controls, panel(self.notifications_panel())])
+        widget::column::with_children(panels)
             .spacing(PANEL_GAP)
             .into()
+    }
+
+    /// A section's title that folds it away or opens it, with an arrow, and
+    /// maybe a button of its own at the end.
+    fn fold_header<'a>(
+        &'a self,
+        section: crate::layout::Section,
+        title: String,
+        trailing: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let spacing = theme::spacing();
+        let open = !self.layout.folded.contains(&section);
+        let toggle = button::custom(
+            widget::row::with_children(vec![
+                widget::icon::icon(icon(section.icon())).size(16).into(),
+                widget::text::heading(title).width(Length::Fill).into(),
+                widget::icon::icon(icon(if open { "go-up-symbolic" } else { "go-down-symbolic" }))
+                    .size(16)
+                    .into(),
+            ])
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, spacing.space_xxs])
+        .width(Length::Fill)
+        .class(theme::Button::Text)
+        .on_press(Message::ToggleFold(section));
+        let mut row = widget::row::with_capacity(2)
+            .push(toggle)
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center);
+        if let Some(trailing) = trailing.filter(|_| open) {
+            row = row.push(trailing);
+        }
+        row.into()
     }
 
     /// Who is using the camera or the microphone.
@@ -1410,23 +1577,27 @@ impl App {
             .padding(spacing.space_s)
             .into();
         }
-        let header = widget::row::with_children(vec![
-            widget::text::heading(t.notifications).width(Length::Fill).into(),
-            button::custom(
-                widget::row::with_children(vec![
-                    widget::icon::icon(icon("edit-clear-all-symbolic")).size(16).into(),
-                    widget::text::caption(t.clear_all).into(),
-                ])
-                .spacing(spacing.space_xxs)
-                .align_y(Alignment::Center),
-            )
-            .padding([6, 12])
-            .class(pill_class())
-            .on_press(Message::ClearNotifications)
-            .into(),
-        ])
-        .padding([0, 0, 0, spacing.space_xxs])
-        .align_y(Alignment::Center);
+        let section = crate::layout::Section::Notifications;
+        let clear: Element<'_, Message> = button::custom(
+            widget::row::with_children(vec![
+                widget::icon::icon(icon("edit-clear-all-symbolic")).size(16).into(),
+                widget::text::caption(t.clear_all).into(),
+            ])
+            .spacing(spacing.space_xxs)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 12])
+        .class(pill_class())
+        .on_press(Message::ClearNotifications)
+        .into();
+        let header = self.fold_header(
+            section,
+            format!("{} ({})", t.notifications, self.notifications.len()),
+            Some(clear),
+        );
+        if self.layout.folded.contains(&section) {
+            return widget::container(header).padding(spacing.space_s).into();
+        }
 
         // An app's notifications together, where its newest is; only that one,
         // with how many more, until asked for the rest.
@@ -1465,7 +1636,7 @@ impl App {
         }
         let list = widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
             .height(Length::Shrink);
-        widget::column::with_children(vec![header.into(), list.into()])
+        widget::column::with_children(vec![header, list.into()])
             .spacing(spacing.space_xs)
             .padding(spacing.space_s)
             .into()
@@ -1636,61 +1807,86 @@ impl App {
         row.push(actions).into()
     }
 
-    /// Volume and brightness, thick, as phones have them, each with a round
-    /// arrow to its page.
-    fn sliders(&self) -> Element<'_, Message> {
-        let spacing = theme::spacing();
-        let mut column = widget::column::with_capacity(2).spacing(spacing.space_xs);
-        let slider_row = |level: Level<'static, Message>, more: Message| {
-            widget::row::with_children(vec![
-                level.into(),
-                circle_button("go-next-symbolic", more, 44.0).into(),
-            ])
-            .spacing(spacing.space_xs)
-            .align_y(Alignment::Center)
-        };
-        if let Some(volume) = &self.volume {
-            column = column.push(slider_row(
-                // the icon mutes
-                Level::new(
-                    widget::icon::icon(icon(self.volume_icon())).size(20),
-                    volume.level,
-                    |level| Message::SetVolume(level * 100.0),
-                )
-                .on_release(Message::AdjustDone)
-                .on_icon_press(Some(Message::ToggleMute))
-                .dimmed(volume.muted),
-                Message::ShowPage(Page::Sound),
-            ));
-        }
-        if let Some((current, max)) = self.brightness {
-            column = column.push(slider_row(
-                Level::new(
-                    widget::icon::icon(icon("display-brightness-symbolic")).size(20),
-                    current as f32 / max.max(1) as f32,
-                    |level| Message::SetBrightness(level * 100.0),
-                )
-                .on_release(Message::AdjustDone),
+    /// A thick slider, as phones have them, with a round arrow to its page.
+    fn slider_row(level: Level<'static, Message>, more: Message) -> Element<'static, Message> {
+        widget::row::with_children(vec![
+            level.into(),
+            circle_button("go-next-symbolic", more, 44.0).into(),
+        ])
+        .spacing(theme::spacing().space_xs)
+        .align_y(Alignment::Center)
+        .into()
+    }
+
+    fn volume_slider(&self) -> Option<Element<'_, Message>> {
+        let volume = self.volume.as_ref()?;
+        Some(Self::slider_row(
+            // the icon mutes
+            Level::new(
+                widget::icon::icon(icon(self.volume_icon())).size(20),
+                volume.level,
+                |level| Message::SetVolume(level * 100.0),
+            )
+            .on_release(Message::AdjustDone)
+            .on_icon_press(Some(Message::ToggleMute))
+            .dimmed(volume.muted),
+            Message::ShowPage(Page::Sound),
+        ))
+    }
+
+    /// The main monitor's brightness, over DDC; or the screen's, as COSMIC
+    /// sets it. The arrow leads to every monitor's.
+    fn brightness_slider(&self) -> Option<Element<'_, Message>> {
+        let brightness_icon = || widget::icon::icon(icon("display-brightness-symbolic")).size(20);
+        if let Some((index, (_, current, max))) =
+            self.primary_display_index().and_then(|i| Some((i, self.displays.as_ref()?[i].ddc?)))
+        {
+            return Some(Self::slider_row(
+                Level::new(brightness_icon(), current as f32 / max.max(1) as f32, move |level| {
+                    Message::SetDdcBrightness(index, level * 100.0)
+                })
+                .on_release(Message::ApplyDdcBrightness(index)),
                 Message::ShowPage(Page::Displays),
             ));
         }
-        column.into()
+        let (current, max) = self.brightness?;
+        Some(Self::slider_row(
+            Level::new(brightness_icon(), current as f32 / max.max(1) as f32, |level| {
+                Message::SetBrightness(level * 100.0)
+            })
+            .on_release(Message::AdjustDone),
+            Message::ShowPage(Page::Displays),
+        ))
     }
 
-    /// The tiles that are on, for the bar: icon and what it says. Wi-Fi has
-    /// its own.
-    pub(crate) fn active_tiles(&self) -> Vec<(&'static str, String)> {
+    /// The monitor picked as main, by index, among those on with DDC; else
+    /// the biggest of them.
+    pub(crate) fn primary_display_index(&self) -> Option<usize> {
+        let displays = self.displays.as_ref()?;
+        let candidates = || {
+            displays
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.enabled && d.ddc.is_some())
+        };
+        candidates()
+            .find(|(_, d)| Some(&d.name) == self.primary_display.as_ref())
+            .or_else(|| candidates().max_by_key(|(_, d)| d.width * d.height))
+            .map(|(i, _)| i)
+    }
+
+    /// The tiles whose icon goes on the bar, as picked for each: always, or
+    /// while on. Wi-Fi has its own.
+    pub(crate) fn bar_tiles(&self) -> Vec<(Tile, TileState)> {
+        use crate::layout::{BarItem, Show};
         Tile::ALL
             .into_iter()
             .filter(|tile| *tile != Tile::Wifi)
-            .filter_map(|tile| self.tile_state(tile))
-            .filter(|state| state.on)
-            .map(|state| {
-                let text = match &state.subtitle {
-                    Some(subtitle) => format!("{} · {subtitle}", state.title),
-                    None => state.title.to_owned(),
-                };
-                (state.icon, text)
+            .filter_map(|tile| Some((tile, self.tile_state(tile)?)))
+            .filter(|(tile, state)| match self.panel_icons.get(BarItem::Tile(*tile)) {
+                Show::Always => true,
+                Show::Active => state.on,
+                Show::Never => false,
             })
             .collect()
     }

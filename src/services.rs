@@ -1077,10 +1077,42 @@ fn parse_displays(kdl: &str) -> Vec<Display> {
     displays
 }
 
+/// `ddcutil` with these arguments, one at a time across the applet's
+/// instances (one per panel): two at once on the same bus fail.
+fn ddcutil<I, S>(args: I) -> tokio::process::Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let lock = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into()) + "/central-ddc.lock";
+    let mut command = crate::host::command("flock", &[]);
+    command.arg(lock).arg("ddcutil").args(args);
+    command
+}
+
+/// A monitor's brightness, `VCP 10`: current and maximum. DDC sometimes
+/// doesn't answer the first time.
+async fn ddc_brightness(number: u32) -> Option<(u32, u32)> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let Ok(vcp) = ddcutil(["--display", &number.to_string(), "getvcp", "10", "--brief"])
+            .output()
+            .await
+        else {
+            return None;
+        };
+        if let Some(brightness) = parse_vcp(&String::from_utf8_lossy(&vcp.stdout)) {
+            return Some(brightness);
+        }
+    }
+    None
+}
+
 /// External monitors `ddcutil` can talk to, by connector: their display numbers.
 async fn ddc_displays() -> HashMap<String, u32> {
-    let Ok(output) = crate::host::command("ddcutil", &[])
-        .args(["detect", "--brief"])
+    let Ok(output) = ddcutil(["detect", "--brief"])
         .output()
         .await
     else {
@@ -1127,14 +1159,7 @@ pub async fn displays() -> Vec<Display> {
             let Some(&number) = ddc.get(&display.name) else {
                 continue;
             };
-            let Ok(vcp) = crate::host::command("ddcutil", &[])
-                .args(["--display", &number.to_string(), "getvcp", "10", "--brief"])
-                .output()
-                .await
-            else {
-                continue;
-            };
-            if let Some((current, max)) = parse_vcp(&String::from_utf8_lossy(&vcp.stdout)) {
+            if let Some((current, max)) = ddc_brightness(number).await {
                 display.ddc = Some((number, current, max));
             }
         }
@@ -1159,8 +1184,7 @@ pub async fn set_scale(display: Display, scale: f32) {
 }
 
 pub async fn set_ddc_brightness(number: u32, value: u32) {
-    _ = crate::host::command("ddcutil", &[])
-        .args(["--display", &number.to_string(), "setvcp", "10", &value.to_string()])
+    _ = ddcutil(["--display", &number.to_string(), "setvcp", "10", &value.to_string()])
         .status()
         .await;
 }
