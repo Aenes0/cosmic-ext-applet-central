@@ -299,8 +299,8 @@ impl Kind {
     }
 }
 
-/// At most three bubbles, so two breaks; each with two lines at most.
-pub const MAX_BUBBLES: usize = 3;
+/// At most two bubbles, so one break; each with two lines at most.
+pub const MAX_BUBBLES: usize = 2;
 pub const MAX_DIVIDERS: usize = 2;
 
 /// Whether these items keep to the limits: bubbles, and lines in each.
@@ -706,6 +706,8 @@ mod tests {
         let tile = p(Kind::Tile(Tile::Wifi));
         let items = [tile, p(Kind::Divider), tile, p(Kind::Bubble), tile];
         assert!(within_limits(&items));
+        let three_bubbles = [tile, p(Kind::Bubble), tile, p(Kind::Bubble)];
+        assert!(!within_limits(&three_bubbles));
         let three_lines = [p(Kind::Divider), p(Kind::Divider), p(Kind::Divider)];
         assert!(!within_limits(&three_lines));
         let four_bubbles = [p(Kind::Bubble), p(Kind::Bubble), p(Kind::Bubble)];

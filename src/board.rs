@@ -142,15 +142,18 @@ impl App {
             if rows.is_empty() {
                 continue;
             }
-            // What can be added, just above the bubble whose "+" was pressed.
-            if editing && self.adding && self.add_target == number {
-                panels.push(self.adding_panel());
-            }
             panels.push(panel(
                 widget::column::with_children(rows)
                     .spacing(spacing.space_s)
                     .padding(spacing.space_m),
             ));
+        }
+        // Room for one more bubble: a thin one under the last, that makes it.
+        if editing {
+            let bubbles = self.tiles.iter().filter(|p| p.kind == Kind::Bubble).count() + 1;
+            if bubbles < crate::tiles::MAX_BUBBLES {
+                panels.push(self.new_bubble(bubbles));
+            }
         }
         panels.push(panel(self.media_panel()));
         let column = widget::column::with_children(panels).spacing(PANEL_GAP);
@@ -187,7 +190,8 @@ impl App {
             return None;
         }
         let sizes: Vec<(u16, u16)> = shown.iter().map(|(size, ..)| *size).collect();
-        let mut cells = Cells::new(COLUMNS, ROW, gap());
+        // Trembling a little while editing, as phones' icons.
+        let mut cells = Cells::new(COLUMNS, ROW, gap()).jiggle(editing);
         for (cell, (_, key, element)) in pack(&sizes).into_iter().zip(shown) {
             cells = cells.push_keyed(key, cell, element);
         }
@@ -242,8 +246,31 @@ impl App {
         .into()
     }
 
+    /// While editing, a thin bubble under the last that makes one more.
+    fn new_bubble(&self, count: usize) -> Element<'_, Message> {
+        let tx = texts();
+        let spacing = theme::spacing();
+        panel(
+            button::custom(
+                widget::container(
+                    widget::row::with_children(vec![
+                        widget::icon::icon(icon("list-add-symbolic")).size(16).into(),
+                        widget::text::body(tx.bubble).into(),
+                    ])
+                    .spacing(spacing.space_xs)
+                    .align_y(Alignment::Center),
+                )
+                .center_x(Length::Fill),
+            )
+            .padding([10, 14])
+            .width(Length::Fill)
+            .class(theme::Button::Text)
+            .on_press(Message::AddStructure(Kind::Bubble, count)),
+        )
+    }
+
     /// A bubble's "+" while editing, round on its grid: what can be added
-    /// opens above the bubble.
+    /// opens over the panel.
     fn add_here(&self, number: usize) -> Element<'_, Message> {
         let tx = texts();
         let open = self.adding && self.add_target == number;
@@ -312,8 +339,8 @@ impl App {
     /// An item while editing: its icon, its name if it has room, a "−" on
     /// its corner; press to drag it, or tap to pick it.
     fn edit_item(&self, index: usize, placed: Placed) -> Element<'_, Message> {
-        let dragged = self.drag.is_some_and(|d| d.index == index && d.moved);
-        let selected = self.selected_tile == Some(index) || dragged;
+        // Only the one dragged stands out: the rest is done by hovering.
+        let selected = self.drag.is_some_and(|d| d.index == index && d.moved);
         let icon_name = match placed.kind {
             Kind::Tile(tile) => self.tile_state(tile).map_or(tile.icon(), |s| s.icon),
             kind => kind.icon(),
@@ -488,8 +515,6 @@ impl App {
             .class(edit_container(false));
         let mut tools: Vec<Element<'_, Message>> = vec![buttons.into(), about.into()];
         tools.push(widget::divider::horizontal::default().into());
-        tools.extend(self.structure_tools());
-        tools.push(widget::divider::horizontal::default().into());
         tools.extend(self.bar_tools());
         tools.push(widget::divider::horizontal::default().into());
         tools.push(restore.into());
@@ -503,58 +528,8 @@ impl App {
         )
     }
 
-    /// The bubble a line goes to: the picked item's, else the last.
-    fn line_target(&self) -> usize {
-        let upto = self.selected_tile.unwrap_or(self.tiles.len()).min(self.tiles.len());
-        self.tiles[..upto].iter().filter(|p| p.kind == Kind::Bubble).count()
-    }
-
-    /// New bubbles and lines, within the limits.
-    fn structure_tools(&self) -> Vec<Element<'_, Message>> {
-        let tx = texts();
-        let spacing = theme::spacing();
-        let line_bubble = self.line_target();
-        let can = |kind: Kind, bubble: usize| {
-            let mut trial = self.tiles.clone();
-            trial.insert(self.insert_at(bubble, kind), Placed::new(kind));
-            crate::tiles::within_limits(&trial)
-        };
-        let last_bubble = self.tiles.iter().filter(|p| p.kind == Kind::Bubble).count();
-        let piece = |kind: Kind, label: String, enabled: bool, message: Message| -> Element<'_, Message> {
-            button::custom(
-                widget::row::with_children(vec![
-                    widget::icon::icon(icon(kind.icon())).size(18).into(),
-                    widget::text::body(label).into(),
-                ])
-                .spacing(spacing.space_xs)
-                .align_y(Alignment::Center),
-            )
-            .padding([10, 14])
-            .width(Length::Fill)
-            .class(edit_class(false))
-            .on_press_maybe(enabled.then_some(message))
-            .into()
-        };
-        vec![
-            widget::text::heading(tx.structure).into(),
-            piece(
-                Kind::Bubble,
-                tx.bubble.to_owned(),
-                can(Kind::Bubble, last_bubble + 1),
-                Message::AddStructure(Kind::Bubble, last_bubble + 1),
-            ),
-            piece(
-                Kind::Divider,
-                format!("{} ({} {})", tx.divider, tx.bubble_word.to_lowercase(), line_bubble + 1),
-                can(Kind::Divider, line_bubble),
-                Message::AddStructure(Kind::Divider, line_bubble),
-            ),
-            widget::text::caption(tx.limit).class(theme::Text::Custom(dimmed)).into(),
-        ]
-    }
-
-    /// What can be added, a panel above the bubble whose "+" was pressed;
-    /// with the icons only on the bar, and the bar's spacing.
+    /// What can be added to the bubble whose "+" was pressed, lines too: a
+    /// card floating over the panel.
     pub fn adding_panel(&self) -> Element<'_, Message> {
         let tx = texts();
         let spacing = theme::spacing();
@@ -576,6 +551,7 @@ impl App {
         let missing: Vec<Kind> = Kind::all()
             .into_iter()
             .filter(|kind| !self.tiles.iter().any(|p| p.kind == *kind))
+            .chain([Kind::Divider])
             .collect();
         let add_chip = |kind: Kind| -> Element<'_, Message> {
             let mut trial = self.tiles.clone();
@@ -604,6 +580,7 @@ impl App {
             .into()
         };
         tools.push(small_grid(missing.into_iter().map(add_chip).collect(), 80.0, COLUMNS));
+        tools.push(widget::text::caption(tx.limit).class(theme::Text::Custom(dimmed)).into());
         panel(
             widget::column::with_children(tools)
                 .spacing(spacing.space_s)

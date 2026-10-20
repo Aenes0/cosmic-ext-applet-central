@@ -1104,9 +1104,16 @@ pub struct Cells<'a, Message> {
     columns: u16,
     row_height: f32,
     gap: f32,
+    /// Each child trembles a little, as phones' icons while editing.
+    jiggle: bool,
 }
 
 impl<'a, Message> Cells<'a, Message> {
+    pub fn jiggle(mut self, jiggle: bool) -> Self {
+        self.jiggle = jiggle;
+        self
+    }
+
     pub fn new(columns: u16, row_height: f32, gap: f32) -> Self {
         Self {
             children: Vec::new(),
@@ -1115,6 +1122,7 @@ impl<'a, Message> Cells<'a, Message> {
             columns: columns.max(1),
             row_height,
             gap,
+            jiggle: false,
         }
     }
 
@@ -1168,9 +1176,26 @@ impl Slide {
     }
 }
 
-#[derive(Default)]
 struct CellsState {
     slides: std::collections::HashMap<u64, Slide>,
+    /// Since when it's been there, for the trembling.
+    since: Instant,
+}
+
+impl Default for CellsState {
+    fn default() -> Self {
+        Self {
+            slides: std::collections::HashMap::new(),
+            since: Instant::now(),
+        }
+    }
+}
+
+/// A child's little tremble now: a pixel or so, each in its own phase.
+fn tremble(since: Instant, key: u64) -> Vector {
+    let t = since.elapsed().as_secs_f32();
+    let phase = (key % 97) as f32 * 0.7;
+    Vector::new((t * 17.0 + phase).sin() * 0.7, (t * 13.0 + phase * 1.3).cos() * 0.6)
 }
 
 impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<'_, Message> {
@@ -1293,7 +1318,8 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<
         viewport: &Rectangle,
     ) {
         if let Event::Window(window::Event::RedrawRequested(_)) = event
-            && tree.state.downcast_ref::<CellsState>().slides.values().any(Slide::moving)
+            && (self.jiggle
+                || tree.state.downcast_ref::<CellsState>().slides.values().any(Slide::moving))
         {
             shell.request_redraw();
         }
@@ -1351,7 +1377,8 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let slides = &tree.state.downcast_ref::<CellsState>().slides;
+        let cells_state = tree.state.downcast_ref::<CellsState>();
+        let slides = &cells_state.slides;
         for (((child, state), c_layout), key) in self
             .children
             .iter()
@@ -1360,10 +1387,13 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<
             .zip(&self.keys)
         {
             // Drawn where it's sliding through, a little off its place.
-            let offset = slides.get(key).map_or(Vector::ZERO, |slide| {
+            let mut offset = slides.get(key).map_or(Vector::ZERO, |slide| {
                 let at = slide.at();
                 Vector::new(at.x - slide.to.x, at.y - slide.to.y)
             });
+            if self.jiggle {
+                offset = offset + tremble(cells_state.since, *key);
+            }
             let c_layout = c_layout.with_virtual_offset(layout.virtual_offset());
             if !(c_layout.bounds() + offset).intersects(viewport) {
                 continue;

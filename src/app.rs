@@ -1767,7 +1767,65 @@ impl cosmic::Application for App {
                 widget::container(self.edit_side())
                     .width(Length::Fixed(crate::board::SIDEBAR))
                     .into(),
-                widget::container(self.edit_page()).width(Length::Fixed(WIDTH)).into(),
+                {
+                    let board: Element<'_, Message> =
+                        widget::container(self.edit_page()).width(Length::Fixed(WIDTH)).into();
+                    if self.adding {
+                        // What can be added, a card floating over the panel,
+                        // the rest dimmed; a click on that closes it.
+                        let backdrop = widget::mouse_area(
+                            widget::container(widget::space::horizontal())
+                                .width(Length::Fill)
+                                .height(Length::Fill)
+                                .class(theme::Container::custom(|theme| {
+                                    let mut shade: iced::Color =
+                                        theme.cosmic().background(theme.transparent).base.into();
+                                    shade.a = 0.72;
+                                    widget::container::Style {
+                                        background: Some(iced::Background::Color(shade)),
+                                        border: iced::Border {
+                                            radius: theme.cosmic().corner_radii.radius_m.into(),
+                                            ..Default::default()
+                                        },
+                                        ..Default::default()
+                                    }
+                                })),
+                        )
+                        .on_press(Message::CloseAdding);
+                        // Solid, unlike the panels, which the theme may let
+                        // show through: nothing behind it reads through.
+                        let card = widget::container(
+                            widget::container(self.adding_panel())
+                                .width(Length::Fixed(WIDTH - 32.0))
+                                .class(theme::Container::custom(|theme| {
+                                    let cosmic = theme.cosmic();
+                                    let mut base: iced::Color =
+                                        cosmic.background(theme.transparent).base.into();
+                                    base.a = 1.0;
+                                    widget::container::Style {
+                                        background: Some(iced::Background::Color(base)),
+                                        border: iced::Border {
+                                            radius: cosmic.corner_radii.radius_m.into(),
+                                            width: 1.0,
+                                            color: cosmic.accent_color().into(),
+                                        },
+                                        shadow: iced::Shadow {
+                                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+                                            offset: iced::Vector::new(0.0, 6.0),
+                                            blur_radius: 24.0,
+                                        },
+                                        ..Default::default()
+                                    }
+                                })),
+                        )
+                        .center(Length::Fill);
+                        iced::widget::stack(vec![board, backdrop.into(), card.into()])
+                            .width(Length::Fixed(WIDTH))
+                            .into()
+                    } else {
+                        board
+                    }
+                },
             ])
             .spacing(pages::PANEL_GAP)
             .into(),
