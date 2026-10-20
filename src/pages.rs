@@ -999,7 +999,8 @@ impl App {
     }
 
     /// What's playing, with its cover, progress and controls.
-    pub(crate) fn media_card(&self) -> Option<Element<'_, Message>> {
+    /// `fold` goes at the end of its last row: the arrow that folds it.
+    pub(crate) fn media_card<'a>(&'a self, fold: Element<'a, Message>) -> Option<Element<'a, Message>> {
         let media = self.shown_media()?;
         let spacing = theme::spacing();
         let cover: Element<'_, Message> = match &media.art {
@@ -1145,7 +1146,7 @@ impl App {
         } else {
             bottom.push(widget::space::horizontal())
         };
-        let bottom = bottom.push(outputs).push(switcher);
+        let bottom = bottom.push(outputs).push(switcher).push(fold);
         let mut card = widget::column::with_capacity(3)
             .push(top)
             .push(bottom)
@@ -1191,16 +1192,8 @@ impl App {
         match self.shown_media() {
             Some(media) if folded => column = column.push(self.media_mini(media, fold(true))),
             Some(_) => {
-                if let Some(card) = self.media_card() {
-                    // The fold's arrow on the card's corner.
-                    column = column.push(iced::widget::stack(vec![
-                        card,
-                        widget::container(fold(false))
-                            .width(Length::Fill)
-                            .align_x(iced::alignment::Horizontal::Right)
-                            .padding([2, 2, 0, 0])
-                            .into(),
-                    ]));
+                if let Some(card) = self.media_card(fold(false)) {
+                    column = column.push(card);
                 }
             }
             None => {
@@ -1217,10 +1210,43 @@ impl App {
                 );
             }
         }
-        if let Some(volume) = self.volume_slider() {
+        // Folded with a player, the volume goes low too.
+        let low = folded && self.shown_media().is_some();
+        if let Some(volume) = if low { self.volume_compact() } else { self.volume_slider() } {
             column = column.push(volume);
         }
         column.padding(spacing.space_s).into()
+    }
+
+    /// The volume, low: its icon, which mutes, a thin rail, the percentage,
+    /// a small arrow to the sound's page.
+    fn volume_compact(&self) -> Option<Element<'_, Message>> {
+        let volume = self.volume.as_ref()?;
+        let spacing = theme::spacing();
+        let level = if volume.muted { 0.0 } else { volume.level };
+        Some(
+            widget::row::with_children(vec![
+                Level::new(
+                    widget::icon::icon(icon(self.volume_icon())).size(16),
+                    level,
+                    |level| Message::SetVolume(level * 100.0),
+                )
+                .compact()
+                .on_release(Message::AdjustDone)
+                .on_icon_press(Some(Message::ToggleMute))
+                .dimmed(volume.muted)
+                .into(),
+                widget::text::caption(format!("{:.0}%", level * 100.0))
+                    .width(Length::Fixed(36.0))
+                    .align_x(iced::alignment::Horizontal::Right)
+                    .into(),
+                circle_button("go-next-symbolic", Message::ShowPage(Page::Sound), 32.0).into(),
+            ])
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center)
+            .padding([0, spacing.space_xxs])
+            .into(),
+        )
     }
 
     /// What's playing in a line: its cover, title, play and pause.

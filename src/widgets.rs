@@ -462,6 +462,8 @@ pub struct Level<'a, Message> {
     height: f32,
     /// Standing up, filling from the bottom, the icon at the foot.
     vertical: bool,
+    /// Low: the icon, then a thin rail with a round knob.
+    compact: bool,
 }
 
 impl<'a, Message> Level<'a, Message> {
@@ -479,7 +481,15 @@ impl<'a, Message> Level<'a, Message> {
             dimmed: false,
             height: 44.0,
             vertical: false,
+            compact: false,
         }
+    }
+
+    /// Low, beside a folded player: the icon, then a thin rail with a knob.
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self.height = 32.0;
+        self
     }
 
     /// Standing up, as tall as it's given: filling from the bottom.
@@ -530,6 +540,11 @@ impl<'a, Message> Level<'a, Message> {
     /// icon's circle.
     fn level_at(&self, bounds: Rectangle, at: Point) -> f32 {
         let side = self.thickness(bounds);
+        if self.compact {
+            let start = bounds.x + side + COMPACT_KNOB;
+            let span = (bounds.width - side - 2.0 * COMPACT_KNOB).max(1.0);
+            return ((at.x - start) / span).clamp(0.0, 1.0);
+        }
         let span = (self.length(bounds) - side).max(1.0);
         let along = if self.vertical {
             bounds.y + bounds.height - side / 2.0 - at.y
@@ -549,6 +564,9 @@ struct LevelState {
 
 /// Moving this far from a press on the icon makes it a drag.
 const DRAG_START: f32 = 4.0;
+/// A compact level's knob's radius, and its rail's thickness.
+const COMPACT_KNOB: f32 = 7.0;
+const COMPACT_RAIL: f32 = 6.0;
 
 impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<'_, Message> {
     fn tag(&self) -> tree::Tag {
@@ -686,6 +704,9 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         let cosmic = theme.cosmic();
         let component = &cosmic.background(theme.transparent).component;
         let hovered = cursor.is_over(bounds) || state.dragging;
+        if self.compact {
+            return self.draw_compact(tree, renderer, theme, style, layout, cursor, viewport, hovered);
+        }
         let track: Color = if hovered { component.hover } else { component.base }.into();
         let side = self.thickness(bounds);
         let radius = side / 2.0;
@@ -792,6 +813,104 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         } else {
             mouse::Interaction::None
         }
+    }
+}
+
+impl<Message> Level<'_, Message> {
+    /// The low level: the icon, a round button's worth of room, then a thin
+    /// rail lit up to a round knob.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_compact(
+        &self,
+        tree: &Tree,
+        renderer: &mut cosmic::Renderer,
+        theme: &cosmic::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        hovered: bool,
+    ) {
+        let bounds = layout.bounds();
+        let cosmic = theme.cosmic();
+        let component = &cosmic.background(theme.transparent).component;
+        let side = bounds.height;
+        // Round behind the icon, lighter when hovered, as the tiles.
+        let over_icon = cursor.position_over(self.icon_bounds(bounds)).is_some();
+        let (lit, on): (Color, Color) = if self.dimmed {
+            (component.pressed.into(), component.on.into())
+        } else {
+            let accent = &cosmic.accent_button;
+            (accent.base.into(), readable(accent.on, accent.base))
+        };
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: self.icon_bounds(bounds),
+                border: Border {
+                    radius: (side / 2.0).into(),
+                    ..Border::default()
+                },
+                ..renderer::Quad::default()
+            },
+            Color::from(if over_icon { component.hover } else { component.base }),
+        );
+        let rail = Rectangle::new(
+            Point::new(bounds.x + side + COMPACT_KNOB, bounds.center_y() - COMPACT_RAIL / 2.0),
+            Size::new((bounds.width - side - 2.0 * COMPACT_KNOB).max(0.0), COMPACT_RAIL),
+        );
+        let track: Color = if hovered { component.hover } else { component.base }.into();
+        let round = Border {
+            radius: (COMPACT_RAIL / 2.0).into(),
+            ..Border::default()
+        };
+        renderer.fill_quad(
+            renderer::Quad { bounds: rail, border: round, ..renderer::Quad::default() },
+            track,
+        );
+        let x = rail.x + rail.width * self.value;
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(rail.position(), Size::new(x - rail.x, rail.height)),
+                border: round,
+                ..renderer::Quad::default()
+            },
+            lit,
+        );
+        let knob = if hovered { COMPACT_KNOB + 1.0 } else { COMPACT_KNOB };
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(
+                    Point::new(x - knob, bounds.center_y() - knob),
+                    Size::new(2.0 * knob, 2.0 * knob),
+                ),
+                border: Border {
+                    radius: knob.into(),
+                    width: 2.0,
+                    color: lit,
+                },
+                ..renderer::Quad::default()
+            },
+            Color::from(cosmic.background(theme.transparent).base),
+        );
+        let icon_layout = layout
+            .children()
+            .next()
+            .expect("laid out with its icon")
+            .with_virtual_offset(layout.virtual_offset());
+        let icon_color: Color = if self.dimmed { on } else { lit };
+        self.icon.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            &renderer::Style {
+                icon_color,
+                text_color: icon_color,
+                scale_factor: style.scale_factor,
+            },
+            icon_layout,
+            cursor,
+            viewport,
+        );
     }
 }
 
