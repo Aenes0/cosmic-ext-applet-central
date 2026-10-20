@@ -151,6 +151,8 @@ pub enum Message {
     OpenHotEdge,
     /// A screen's name and height.
     Output(Option<String>, Option<i32>),
+    /// The panel's screen's height, turned or not, from cosmic-randr.
+    ScreenHeight(Option<i32>),
     /// A window's new size: the panel button's, for the popup to line up with.
     Resized(window::Id, iced::Size),
     ToggleShowPercentage,
@@ -318,6 +320,8 @@ pub struct App {
     pub(crate) adding: bool,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
+    /// Whether that came from cosmic-randr, which knows a screen standing.
+    screen_height_known: bool,
     /// The panel button's size, all its icons.
     button_size: Option<iced::Size>,
     /// When a volume or brightness slider last moved. What PipeWire or the
@@ -1094,7 +1098,21 @@ impl cosmic::Application for App {
                 if name.as_deref() == Some(panel.as_str())
                     || (panel.is_empty() || panel == "all") && self.screen_height.is_none()
                 {
+                    // What cosmic-randr says wins: it knows a screen standing.
+                    if !self.screen_height_known {
+                        self.screen_height = height;
+                    }
+                    if let Some(name) = name.filter(|_| !self.screen_height_known) {
+                        return Task::future(async move {
+                            cosmic::action::app(Message::ScreenHeight(services::screen_height(name).await))
+                        });
+                    }
+                }
+            }
+            Message::ScreenHeight(height) => {
+                if height.is_some() {
                     self.screen_height = height;
+                    self.screen_height_known = true;
                 }
             }
             Message::Resized(id, size) => {
@@ -1627,7 +1645,10 @@ impl cosmic::Application for App {
                         OutputEvent::Created(Some(info)) | OutputEvent::InfoUpdate(info),
                         _,
                     ),
-                )) => Some(Message::Output(info.name.clone(), info.logical_size.map(|(_, h)| h))),
+                )) => {
+                    let height = info.logical_size.map(|(_, h)| h);
+                    Some(Message::Output(info.name.clone(), height))
+                }
                 _ => None,
             }
         }));

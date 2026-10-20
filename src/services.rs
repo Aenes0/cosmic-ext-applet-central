@@ -1020,6 +1020,8 @@ pub struct Display {
     pub scale: f32,
     /// Its own brightness control over DDC/CI: display number, current, maximum.
     pub ddc: Option<(u32, u32, u32)>,
+    /// Turned a quarter, standing: as tall as it's wide.
+    pub turned: bool,
 }
 
 impl Display {
@@ -1060,6 +1062,8 @@ fn parse_displays(kdl: &str) -> Vec<Display> {
         if line.starts_with("description") {
             display.make = quoted(line, "make").unwrap_or_default();
             display.model = quoted(line, "model").unwrap_or_default();
+        } else if let Some(transform) = line.strip_prefix("transform ") {
+            display.turned = ["90", "270"].iter().any(|t| transform.contains(t));
         } else if let Some(scale) = line.strip_prefix("scale ") {
             display.scale = scale.trim().parse().unwrap_or(1.0);
         } else if line.starts_with("mode ") && line.contains("current=#true") {
@@ -1222,6 +1226,20 @@ pub async fn displays(read: DdcRead) -> Vec<Display> {
         }
     }
     displays
+}
+
+/// How tall a screen is, in logical pixels, turned or not: what COSMIC's
+/// own tool says, as the panel's outputs don't tell a screen standing.
+pub async fn screen_height(name: String) -> Option<i32> {
+    let output = crate::host::command("cosmic-randr", &[])
+        .args(["list", "--kdl"])
+        .output()
+        .await
+        .ok()?;
+    let displays = parse_displays(&String::from_utf8_lossy(&output.stdout));
+    let display = displays.into_iter().find(|d| d.name == name)?;
+    let tall = if display.turned { display.width } else { display.height };
+    Some((tall as f32 / display.scale.max(0.1)) as i32)
 }
 
 pub async fn set_scale(display: Display, scale: f32) {
