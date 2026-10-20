@@ -59,15 +59,6 @@ impl Tile {
         Tile::HotEdge,
     ];
 
-    pub const DEFAULT: [Tile; 6] = [
-        Tile::Wifi,
-        Tile::Bluetooth,
-        Tile::Power,
-        Tile::DoNotDisturb,
-        Tile::DarkMode,
-        Tile::Airplane,
-    ];
-
     /// How it's saved in the configuration.
     pub fn id(self) -> &'static str {
         match self {
@@ -153,37 +144,207 @@ impl Tile {
     }
 }
 
-/// A tile on the panel, and its size: big ones show their name and take two
-/// of the four columns, small ones only their icon.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Placed {
-    pub tile: Tile,
-    pub small: bool,
+/// What can go on the popup's grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Tile(Tile),
+    Volume,
+    Brightness,
+    /// What's playing.
+    Media,
 }
 
-impl Placed {
-    /// `wifi`, or `wifi:small`.
-    pub fn id(self) -> String {
-        match self.small {
-            true => format!("{}:small", self.tile.id()),
-            false => self.tile.id().to_owned(),
+impl Kind {
+    /// Everything there can be, the sliders and media first.
+    pub fn all() -> Vec<Kind> {
+        let mut all = vec![Kind::Volume, Kind::Brightness, Kind::Media];
+        all.extend(Tile::ALL.into_iter().filter(|t| t.available()).map(Kind::Tile));
+        all
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Kind::Tile(tile) => tile.id(),
+            Kind::Volume => "volume",
+            Kind::Brightness => "brightness",
+            Kind::Media => "media",
         }
     }
 
-    pub fn from_id(id: &str) -> Option<Placed> {
-        let (id, small) = match id.strip_suffix(":small") {
-            Some(id) => (id, true),
-            None => (id, false),
-        };
-        Some(Placed {
-            tile: Tile::from_id(id)?,
-            small,
-        })
+    fn from_id(id: &str) -> Option<Kind> {
+        match id {
+            "volume" => Some(Kind::Volume),
+            "brightness" => Some(Kind::Brightness),
+            "media" => Some(Kind::Media),
+            _ => Tile::from_id(id).map(Kind::Tile),
+        }
     }
 
-    pub fn columns(self) -> u16 {
-        if self.small { 1 } else { 2 }
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Tile(tile) => tile.name(),
+            Kind::Volume => strings().volume,
+            Kind::Brightness => crate::texts::texts().brightness,
+            Kind::Media => crate::texts::texts().media,
+        }
     }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Kind::Tile(tile) => tile.icon(),
+            Kind::Volume => "audio-volume-high-symbolic",
+            Kind::Brightness => "display-brightness-symbolic",
+            Kind::Media => "audio-x-generic-symbolic",
+        }
+    }
+
+    /// The sizes it comes in, smallest first.
+    pub fn fits(self) -> &'static [Fit] {
+        match self {
+            Kind::Tile(_) => &[Fit::Icon, Fit::Short, Fit::Pill],
+            Kind::Volume | Kind::Brightness => &[Fit::Vertical, Fit::Horizontal],
+            Kind::Media => &[Fit::Full],
+        }
+    }
+}
+
+/// How an item sits on the grid of six columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Fit {
+    /// A round icon, a column.
+    Icon,
+    /// A short pill, two columns: the icon, and an arrow to more.
+    Short,
+    /// A pill with its name and state, three columns.
+    Pill,
+    /// A slider standing a column wide, two rows tall.
+    Vertical,
+    /// A slider across.
+    Horizontal,
+    /// Across and two rows tall.
+    Full,
+}
+
+impl Fit {
+    fn id(self) -> &'static str {
+        match self {
+            Fit::Icon => "icon",
+            Fit::Short => "short",
+            Fit::Pill => "pill",
+            Fit::Vertical => "vertical",
+            Fit::Horizontal => "horizontal",
+            Fit::Full => "full",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Fit> {
+        [Fit::Icon, Fit::Short, Fit::Pill, Fit::Vertical, Fit::Horizontal, Fit::Full]
+            .into_iter()
+            .find(|f| f.id() == id)
+    }
+
+    pub fn name(self) -> &'static str {
+        let t = crate::texts::texts();
+        match self {
+            Fit::Icon => t.fit_icon,
+            Fit::Short => t.fit_short,
+            Fit::Pill => t.fit_pill,
+            Fit::Vertical => t.fit_vertical,
+            Fit::Horizontal => t.fit_horizontal,
+            Fit::Full => t.fit_full,
+        }
+    }
+
+    /// Columns and rows it takes.
+    pub fn span(self) -> (u16, u16) {
+        match self {
+            Fit::Icon => (1, 1),
+            Fit::Short => (2, 1),
+            Fit::Pill => (3, 1),
+            Fit::Vertical => (1, 2),
+            Fit::Horizontal => (COLUMNS, 1),
+            Fit::Full => (COLUMNS, 2),
+        }
+    }
+}
+
+/// The popup's grid: six columns, so that a row holds six icons, three short
+/// pills or two pills.
+pub const COLUMNS: u16 = 6;
+
+/// An item on the grid, and its size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub kind: Kind,
+    pub fit: Fit,
+}
+
+impl Placed {
+    /// `bluetooth:short`, `volume:vertical`.
+    pub fn id(self) -> String {
+        format!("{}:{}", self.kind.id(), self.fit.id())
+    }
+
+    /// Also the old ids: `wifi`, a big tile, and `wifi:small`.
+    pub fn from_id(id: &str) -> Option<Placed> {
+        let (kind, fit) = match id.split_once(':') {
+            Some((kind, "small")) => (kind, Some(Fit::Icon)),
+            Some((kind, fit)) => (kind, Fit::from_id(fit)),
+            None => (id, None),
+        };
+        let kind = Kind::from_id(kind)?;
+        let fit = fit.filter(|f| kind.fits().contains(f)).unwrap_or(Placed::new(kind).fit);
+        Some(Placed { kind, fit })
+    }
+
+    /// As it goes on at first.
+    pub fn new(kind: Kind) -> Placed {
+        let fit = match kind {
+            Kind::Tile(_) => Fit::Pill,
+            Kind::Volume | Kind::Brightness => Fit::Horizontal,
+            Kind::Media => Fit::Full,
+        };
+        Placed { kind, fit }
+    }
+}
+
+/// Where each item goes, in order: the first free place it fits, from the
+/// top left, so a small one fills a gap a bigger one left.
+pub fn pack(sizes: &[(u16, u16)]) -> Vec<crate::widgets::Cell> {
+    let mut taken: Vec<[bool; COLUMNS as usize]> = Vec::new();
+    let mut cells = Vec::with_capacity(sizes.len());
+    for &(width, height) in sizes {
+        let width = width.clamp(1, COLUMNS);
+        let free = |taken: &Vec<[bool; COLUMNS as usize]>, row: usize, column: usize| {
+            (row..row + height as usize).all(|r| {
+                (column..column + width as usize).all(|c| taken.get(r).is_none_or(|line| !line[c]))
+            })
+        };
+        let mut row = 0;
+        let (row, column) = loop {
+            if let Some(column) =
+                (0..=(COLUMNS - width) as usize).find(|&column| free(&taken, row, column))
+            {
+                break (row, column);
+            }
+            row += 1;
+        };
+        while taken.len() < row + height as usize {
+            taken.push([false; COLUMNS as usize]);
+        }
+        for line in &mut taken[row..row + height as usize] {
+            for cell in &mut line[column..column + width as usize] {
+                *cell = true;
+            }
+        }
+        cells.push(crate::widgets::Cell {
+            column: column as u16,
+            row: row as u16,
+            width,
+            height,
+        });
+    }
+    cells
 }
 
 /// What a tile shows and does right now.
@@ -218,28 +379,6 @@ impl TileState {
 
     pub fn large<'a>(self) -> Element<'a, Message> {
         tile(self.icon, self.title, self.subtitle, self.on, self.toggle, self.details)
-    }
-
-    /// Only the icon: a click toggles, a right click opens its page; the
-    /// name shows on hover.
-    pub fn small<'a>(self) -> Element<'a, Message> {
-        let name = match self.subtitle {
-            Some(subtitle) => format!("{} · {subtitle}", self.title),
-            None => self.title.to_owned(),
-        };
-        widget::tooltip(
-            Surface::new(
-                widget::container(widget::icon::icon(icon(self.icon)).size(20))
-                    .center(Length::Fill)
-                    .class(inherit_colors()),
-                self.on,
-            )
-            .on_press(self.toggle)
-            .on_right_press(self.details),
-            widget::text::body(name),
-            widget::tooltip::Position::Bottom,
-        )
-        .into()
     }
 }
 
@@ -441,7 +580,7 @@ pub fn tile<'a>(
 }
 
 /// The round arrow inside a tile: a shade of what's on the tile, over it.
-fn arrow_class(on: bool) -> theme::Button {
+pub fn arrow_class(on: bool) -> theme::Button {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
         let component = if on {
@@ -496,5 +635,32 @@ fn tile_class(on: bool) -> theme::Button {
         disabled: Box::new(move |theme| style(false, theme)),
         hovered: Box::new(move |_, theme| style(true, theme)),
         pressed: Box::new(move |_, theme| style(true, theme)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packs_into_gaps() {
+        // Two vertical sliders beside a pill fill its row and the next.
+        let cells = pack(&[(1, 2), (1, 2), (3, 1), (1, 1), (6, 1)]);
+        assert_eq!((cells[0].column, cells[0].row), (0, 0));
+        assert_eq!((cells[1].column, cells[1].row), (1, 0));
+        assert_eq!((cells[2].column, cells[2].row), (2, 0));
+        assert_eq!((cells[3].column, cells[3].row), (5, 0));
+        assert_eq!((cells[4].column, cells[4].row), (0, 2));
+    }
+
+    #[test]
+    fn old_ids() {
+        assert_eq!(
+            Placed::from_id("wifi:small"),
+            Some(Placed { kind: Kind::Tile(Tile::Wifi), fit: Fit::Icon })
+        );
+        assert_eq!(Placed::from_id("bluetooth").map(|p| p.fit), Some(Fit::Pill));
+        assert_eq!(Placed::from_id("volume:vertical").map(|p| p.fit), Some(Fit::Vertical));
+        assert_eq!(Placed::from_id("volume:pill").map(|p| p.fit), Some(Fit::Horizontal));
     }
 }

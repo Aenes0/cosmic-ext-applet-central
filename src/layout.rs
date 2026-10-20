@@ -71,25 +71,6 @@ pub enum BarItem {
 }
 
 impl BarItem {
-    /// The bar's own, then each tile's, in the order the editor lists them.
-    pub fn all() -> Vec<BarItem> {
-        let mut items = vec![
-            BarItem::Privacy,
-            BarItem::Notifications,
-            BarItem::Network,
-            BarItem::Volume,
-            BarItem::Peripherals,
-            BarItem::Battery,
-        ];
-        items.extend(
-            Tile::ALL
-                .into_iter()
-                .filter(|tile| *tile != Tile::Wifi && tile.available())
-                .map(BarItem::Tile),
-        );
-        items
-    }
-
     fn id(self) -> String {
         match self {
             BarItem::Privacy => "privacy".into(),
@@ -185,31 +166,17 @@ impl PanelIcons {
     }
 }
 
-/// A part of the popup.
+/// A part of the popup under the grid, that folds away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
-    Volume,
-    Brightness,
-    Tiles,
-    Media,
     Notifications,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
-        Section::Volume,
-        Section::Brightness,
-        Section::Tiles,
-        Section::Media,
-        Section::Notifications,
-    ];
+    pub const ALL: [Section; 1] = [Section::Notifications];
 
     fn id(self) -> &'static str {
         match self {
-            Section::Volume => "volume",
-            Section::Brightness => "brightness",
-            Section::Tiles => "tiles",
-            Section::Media => "media",
             Section::Notifications => "notifications",
         }
     }
@@ -218,82 +185,27 @@ impl Section {
         Self::ALL.into_iter().find(|s| s.id() == id)
     }
 
-    pub fn name(self) -> &'static str {
-        let t = texts();
-        let s = crate::i18n::strings();
-        match self {
-            Section::Volume => s.volume,
-            Section::Brightness => t.brightness,
-            Section::Tiles => t.tiles,
-            Section::Media => t.media,
-            Section::Notifications => s.notifications,
-        }
-    }
-
     pub fn icon(self) -> &'static str {
         match self {
-            Section::Volume => "audio-volume-high-symbolic",
-            Section::Brightness => "display-brightness-symbolic",
-            Section::Tiles => "view-grid-symbolic",
-            Section::Media => "audio-x-generic-symbolic",
             Section::Notifications => "notification-symbolic",
         }
     }
 }
 
-/// The popup's sections, in order, and which are folded.
-#[derive(Clone, Debug)]
+/// Which of the sections are folded.
+#[derive(Clone, Debug, Default)]
 pub struct Layout {
-    pub order: Vec<Section>,
     pub folded: HashSet<Section>,
-}
-
-impl Default for Layout {
-    fn default() -> Self {
-        Layout {
-            order: Section::ALL.to_vec(),
-            folded: HashSet::new(),
-        }
-    }
 }
 
 impl Layout {
     pub fn load() -> Layout {
-        let mut order: Vec<Section> = get::<Vec<String>>("layout")
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|id| Section::from_id(id))
-            .collect();
-        // New sections, from an update, go at the end.
-        for section in Section::ALL {
-            if !order.contains(&section) {
-                order.push(section);
-            }
-        }
         let folded = get::<Vec<String>>("folded")
             .unwrap_or_default()
             .iter()
             .filter_map(|id| Section::from_id(id))
             .collect();
-        Layout { order, folded }
-    }
-
-    /// One place up (`-1`) or down (`1`).
-    pub fn shift(&mut self, section: Section, by: isize) {
-        let Some(index) = self.order.iter().position(|s| *s == section) else {
-            return;
-        };
-        let target = index as isize + by;
-        if target < 0 || target as usize >= self.order.len() {
-            return;
-        }
-        self.order.swap(index, target as usize);
-        set("layout", self.order.iter().map(|s| s.id()).collect::<Vec<_>>());
-    }
-
-    pub fn reset(&mut self) {
-        self.order = Section::ALL.to_vec();
-        set("layout", self.order.iter().map(|s| s.id()).collect::<Vec<_>>());
+        Layout { folded }
     }
 
     pub fn toggle_fold(&mut self, section: Section) {
@@ -302,6 +214,16 @@ impl Layout {
         }
         set("folded", self.folded.iter().map(|s| s.id()).collect::<Vec<_>>());
     }
+}
+
+/// Whether the old list of tiles was made a grid, with the sliders and
+/// media on it.
+pub fn grid_ready() -> bool {
+    get::<bool>("grid_ready").unwrap_or(false)
+}
+
+pub fn set_grid_ready() {
+    set("grid_ready", true);
 }
 
 /// The monitor whose brightness the main slider sets, by connector.

@@ -19,6 +19,7 @@ use crate::{
     bar_spacing::BarSpacing,
     i18n::strings,
     layout::{self, BarItem, Layout, PanelIcons, Section, Show},
+    tiles::{Fit, Kind},
     workspaces,
     media::{self, Control, Media},
     notifications::{self, Notification},
@@ -31,7 +32,7 @@ use crate::{
     transition::Transition,
 };
 
-const WIDTH: f32 = 420.0;
+const WIDTH: f32 = 480.0;
 /// The popup grows with what it shows up to this, until the screen's height
 /// is known; past it the notifications scroll.
 pub const MAX_HEIGHT: f32 = 800.0;
@@ -96,10 +97,10 @@ pub enum Message {
     OpenAt(Page),
     /// When an icon shows on the bar.
     SetBarIcon(BarItem, Show),
-    /// A section of the popup one place up or down.
-    ShiftSection(Section, isize),
     ToggleFold(Section),
-    ResetLayout,
+    /// An item of the grid, by index, and its new size.
+    SetFit(usize, Fit),
+    AddItem(Kind),
     /// The monitor the main brightness slider sets, by connector.
     SetPrimaryDisplay(String),
     Closed(window::Id),
@@ -195,10 +196,7 @@ pub enum Message {
     DragStart(usize),
     DragOver(usize),
     DragEnd,
-    MoveTile(usize, isize),
-    ResizeTile(usize),
     RemoveTile(usize),
-    AddTile(Tile),
     ResetTiles,
     /// How far apart the icons on the panel are.
     SetBarSpacing(BarSpacing),
@@ -400,11 +398,51 @@ impl App {
     }
 }
 
+/// As One UI lays it out: the sliders standing at the left, a pill and
+/// short pills beside them, icons under, what's playing at the end.
 fn default_tiles() -> Vec<Placed> {
-    Tile::DEFAULT
-        .into_iter()
-        .map(|tile| Placed { tile, small: false })
-        .collect()
+    use crate::tiles::Fit::*;
+    let at = |kind, fit| Placed { kind, fit };
+    vec![
+        at(Kind::Volume, Vertical),
+        at(Kind::Brightness, Vertical),
+        at(Kind::Tile(Tile::Wifi), Pill),
+        at(Kind::Tile(Tile::DoNotDisturb), Icon),
+        at(Kind::Tile(Tile::Bluetooth), Short),
+        at(Kind::Tile(Tile::Power), Short),
+        at(Kind::Tile(Tile::DarkMode), Icon),
+        at(Kind::Tile(Tile::Airplane), Icon),
+        at(Kind::Tile(Tile::KeepAwake), Icon),
+        at(Kind::Tile(Tile::Screenshot), Icon),
+        at(Kind::Tile(Tile::Microphone), Icon),
+        at(Kind::Tile(Tile::Workspaces), Icon),
+        at(Kind::Media, Full),
+    ]
+}
+
+/// The saved grid; the old list of tiles gets the sliders and media around
+/// it, once.
+fn load_tiles() -> Vec<Placed> {
+    let Some(ids) = services::tiles() else {
+        return default_tiles();
+    };
+    let mut items: Vec<Placed> = ids.iter().filter_map(|id| Placed::from_id(id)).collect();
+    if !layout::grid_ready() {
+        let has = |items: &Vec<Placed>, kind| items.iter().any(|p: &Placed| p.kind == kind);
+        if !has(&items, Kind::Brightness) {
+            items.insert(0, Placed::new(Kind::Brightness));
+        }
+        if !has(&items, Kind::Volume) {
+            items.insert(0, Placed::new(Kind::Volume));
+        }
+        if !has(&items, Kind::Media) {
+            items.push(Placed::new(Kind::Media));
+        }
+        let ids: Vec<String> = items.iter().map(|t| t.id()).collect();
+        services::set_tiles(&ids);
+        layout::set_grid_ready();
+    }
+    items
 }
 
 fn load_mixer() -> app::Task<Message> {
@@ -520,9 +558,7 @@ impl cosmic::Application for App {
     const APP_ID: &'static str = crate::APP_ID;
 
     fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
-        let tiles = services::tiles()
-            .map(|ids| ids.iter().filter_map(|id| Placed::from_id(id)).collect())
-            .unwrap_or_else(default_tiles);
+        let tiles = load_tiles();
         let app = Self {
             core,
             tiles,
@@ -616,9 +652,22 @@ impl cosmic::Application for App {
                 return self.update(Message::Preview(page));
             }
             Message::SetBarIcon(item, show) => self.panel_icons.set(item, show),
-            Message::ShiftSection(section, by) => self.layout.shift(section, by),
             Message::ToggleFold(section) => self.layout.toggle_fold(section),
-            Message::ResetLayout => self.layout.reset(),
+            Message::SetFit(index, fit) => {
+                if let Some(placed) = self.tiles.get_mut(index)
+                    && placed.kind.fits().contains(&fit)
+                {
+                    placed.fit = fit;
+                    self.save_tiles();
+                }
+            }
+            Message::AddItem(kind) => {
+                if !self.tiles.iter().any(|p| p.kind == kind) {
+                    self.tiles.push(Placed::new(kind));
+                    self.selected_tile = Some(self.tiles.len() - 1);
+                    self.save_tiles();
+                }
+            }
             Message::SetPrimaryDisplay(name) => {
                 layout::set_primary_display(&name);
                 self.primary_display = Some(name);
@@ -1183,30 +1232,10 @@ impl cosmic::Application for App {
                     }
                 }
             }
-            Message::MoveTile(index, by) => {
-                let to = index.saturating_add_signed(by);
-                if to < self.tiles.len() && to != index {
-                    self.tiles.swap(index, to);
-                    self.selected_tile = Some(to);
-                    self.save_tiles();
-                }
-            }
-            Message::ResizeTile(index) => {
-                if let Some(placed) = self.tiles.get_mut(index) {
-                    placed.small = !placed.small;
-                    self.save_tiles();
-                }
-            }
             Message::RemoveTile(index) => {
                 if index < self.tiles.len() {
                     self.tiles.remove(index);
                     self.selected_tile = None;
-                    self.save_tiles();
-                }
-            }
-            Message::AddTile(tile) => {
-                if !self.tiles.iter().any(|p| p.tile == tile) {
-                    self.tiles.push(Placed { tile, small: false });
                     self.save_tiles();
                 }
             }
@@ -1586,7 +1615,7 @@ impl cosmic::Application for App {
         let page = self.page.unwrap_or(Page::Main);
         let content = match page {
             Page::Main => self.main_page(),
-            Page::Edit => pages::panel(self.edit_page()),
+            Page::Edit => self.edit_page(),
             Page::Wifi => pages::panel(self.wifi_page()),
             Page::Vpn => pages::panel(self.vpn_page()),
             Page::Bluetooth => pages::panel(self.bluetooth_page()),
@@ -1597,7 +1626,8 @@ impl cosmic::Application for App {
             Page::DoNotDisturb => pages::panel(self.dnd_page()),
             Page::Session => pages::panel(self.session_page()),
         };
-        let depth = if page == Page::Main { 0 } else { 1 };
+        // Editing is the main page in place: it fades, the others slide.
+        let depth = if matches!(page, Page::Main | Page::Edit) { 0 } else { 1 };
         // The pages draw their own panels, apart, instead of the applet's
         // popup, all one: as applets' popups are sized.
         cosmic::widget::autosize::autosize(

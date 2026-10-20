@@ -435,6 +435,8 @@ pub struct Level<'a, Message> {
     /// Shown greyed, like a muted volume.
     dimmed: bool,
     height: f32,
+    /// Standing up, filling from the bottom, the icon at the foot.
+    vertical: bool,
 }
 
 impl<'a, Message> Level<'a, Message> {
@@ -451,7 +453,24 @@ impl<'a, Message> Level<'a, Message> {
             on_icon_press: None,
             dimmed: false,
             height: 44.0,
+            vertical: false,
         }
+    }
+
+    /// Standing up, as tall as it's given: filling from the bottom.
+    pub fn vertical(mut self) -> Self {
+        self.vertical = true;
+        self
+    }
+
+    /// Its thickness: the icon's square's side.
+    fn thickness(&self, bounds: Rectangle) -> f32 {
+        if self.vertical { bounds.width } else { bounds.height }
+    }
+
+    /// Its length along which it fills.
+    fn length(&self, bounds: Rectangle) -> f32 {
+        if self.vertical { bounds.height } else { bounds.width }
     }
 
     pub fn on_release(mut self, message: Message) -> Self {
@@ -469,17 +488,30 @@ impl<'a, Message> Level<'a, Message> {
         self
     }
 
-    /// The square at the start, where the icon is.
+    /// The square at the start, where the icon is: at the foot when standing.
     fn icon_bounds(&self, bounds: Rectangle) -> Rectangle {
-        Rectangle::new(bounds.position(), Size::new(bounds.height, bounds.height))
+        let side = self.thickness(bounds);
+        if self.vertical {
+            Rectangle::new(
+                Point::new(bounds.x, bounds.y + bounds.height - side),
+                Size::new(side, side),
+            )
+        } else {
+            Rectangle::new(bounds.position(), Size::new(side, side))
+        }
     }
 
-    /// The level at `x`: the lit pill's end follows the pointer, past the
+    /// The level at the pointer: the lit pill's end follows it, past the
     /// icon's circle.
-    fn level_at(&self, bounds: Rectangle, x: f32) -> f32 {
-        let start = bounds.x + bounds.height / 2.0;
-        let span = (bounds.width - bounds.height).max(1.0);
-        ((x - start) / span).clamp(0.0, 1.0)
+    fn level_at(&self, bounds: Rectangle, at: Point) -> f32 {
+        let side = self.thickness(bounds);
+        let span = (self.length(bounds) - side).max(1.0);
+        let along = if self.vertical {
+            bounds.y + bounds.height - side / 2.0 - at.y
+        } else {
+            at.x - (bounds.x + side / 2.0)
+        };
+        (along / span).clamp(0.0, 1.0)
     }
 }
 
@@ -511,7 +543,11 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fixed(self.height))
+        if self.vertical {
+            Size::new(Length::Fill, Length::Fill)
+        } else {
+            Size::new(Length::Fill, Length::Fixed(self.height))
+        }
     }
 
     fn layout(
@@ -520,18 +556,21 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         renderer: &cosmic::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        let height = if self.vertical { Length::Fill } else { Length::Fixed(self.height) };
         let size = limits
             .width(Length::Fill)
-            .height(Length::Fixed(self.height))
-            .resolve(Length::Fill, Length::Fixed(self.height), Size::ZERO);
-        let square = Size::new(self.height, self.height);
+            .height(height)
+            .resolve(Length::Fill, height, Size::ZERO);
+        let side = if self.vertical { size.width } else { size.height };
+        let square = Size::new(side, side);
         let icon = self
             .icon
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, &layout::Limits::new(Size::ZERO, square));
+        let top = if self.vertical { size.height - side } else { 0.0 };
         let offset = Point::new(
             (square.width - icon.size().width) / 2.0,
-            (square.height - icon.size().height) / 2.0,
+            top + (square.height - icon.size().height) / 2.0,
         );
         layout::Node::with_children(size, vec![icon.move_to(offset)])
     }
@@ -549,8 +588,8 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
     ) {
         let state = tree.state.downcast_mut::<LevelState>();
         let bounds = layout.bounds();
-        let set = |shell: &mut Shell<'_, Message>, x: f32| {
-            shell.publish((self.on_change)(self.level_at(bounds, x)));
+        let set = |shell: &mut Shell<'_, Message>, at: Point| {
+            shell.publish((self.on_change)(self.level_at(bounds, at)));
         };
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -561,7 +600,7 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
                     state.on_icon = Some(position);
                 } else {
                     state.dragging = true;
-                    set(shell, position.x);
+                    set(shell, position);
                 }
                 shell.capture_event();
             }
@@ -573,7 +612,7 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
                     state.dragging = true;
                 }
                 if state.dragging {
-                    set(shell, position.x);
+                    set(shell, *position);
                     shell.capture_event();
                 }
                 shell.request_redraw();
@@ -623,7 +662,8 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         let component = &cosmic.background(theme.transparent).component;
         let hovered = cursor.is_over(bounds) || state.dragging;
         let track: Color = if hovered { component.hover } else { component.base }.into();
-        let radius = bounds.height / 2.0;
+        let side = self.thickness(bounds);
+        let radius = side / 2.0;
         renderer.fill_quad(
             renderer::Quad {
                 bounds,
@@ -641,10 +681,19 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
             let accent = &cosmic.accent_button;
             (accent.base.into(), readable(accent.on, accent.base))
         };
-        let width = bounds.height + (bounds.width - bounds.height) * self.value;
+        // How far it's lit, along it, from the icon's end.
+        let lit_length = side + (self.length(bounds) - side) * self.value;
+        let lit_bounds = if self.vertical {
+            Rectangle::new(
+                Point::new(bounds.x, bounds.y + bounds.height - lit_length),
+                Size::new(side, lit_length),
+            )
+        } else {
+            Rectangle::new(bounds.position(), Size::new(lit_length, side))
+        };
         renderer.fill_quad(
             renderer::Quad {
-                bounds: Rectangle::new(bounds.position(), Size::new(width, bounds.height)),
+                bounds: lit_bounds,
                 border: Border {
                     radius: radius.into(),
                     ..Border::default()
@@ -655,19 +704,21 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         );
         // A knob at the lit part's end, like phones draw it, once it's past
         // the icon.
-        let knob = Size::new(4.0, bounds.height * 0.42);
-        if width - bounds.height > 12.0 {
+        if lit_length - side > 12.0 {
+        let (knob, at) = if self.vertical {
+            let knob = Size::new(side * 0.42, 4.0);
+            let y = bounds.y + bounds.height - lit_length + radius / 2.0 - knob.height / 2.0 + 2.0;
+            (knob, Point::new(bounds.center_x() - knob.width / 2.0, y))
+        } else {
+            let knob = Size::new(4.0, side * 0.42);
+            let x = bounds.x + lit_length - radius / 2.0 - knob.width / 2.0 - 2.0;
+            (knob, Point::new(x, bounds.center_y() - knob.height / 2.0))
+        };
         renderer.fill_quad(
             renderer::Quad {
-                bounds: Rectangle::new(
-                    Point::new(
-                        bounds.x + width - radius / 2.0 - knob.width / 2.0 - 2.0,
-                        bounds.center_y() - knob.height / 2.0,
-                    ),
-                    knob,
-                ),
+                bounds: Rectangle::new(at, knob),
                 border: Border {
-                    radius: (knob.width / 2.0).into(),
+                    radius: (knob.width.min(knob.height) / 2.0).into(),
                     ..Border::default()
                 },
                 ..renderer::Quad::default()
@@ -722,6 +773,226 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
 impl<'a, Message: Clone + 'a> From<Level<'a, Message>> for cosmic::Element<'a, Message> {
     fn from(level: Level<'a, Message>) -> Self {
         Self::new(level)
+    }
+}
+
+/// Where an element sits on a grid, in cells: column, row, width, height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cell {
+    pub column: u16,
+    pub row: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+/// Elements laid out on a grid of equal columns and rows, each in its own
+/// cells: as phones' quick panels, where a slider can stand two rows tall
+/// beside the tiles.
+pub struct Cells<'a, Message> {
+    children: Vec<cosmic::Element<'a, Message>>,
+    cells: Vec<Cell>,
+    columns: u16,
+    row_height: f32,
+    gap: f32,
+}
+
+impl<'a, Message> Cells<'a, Message> {
+    pub fn new(columns: u16, row_height: f32, gap: f32) -> Self {
+        Self {
+            children: Vec::new(),
+            cells: Vec::new(),
+            columns: columns.max(1),
+            row_height,
+            gap,
+        }
+    }
+
+    pub fn push(mut self, cell: Cell, child: impl Into<cosmic::Element<'a, Message>>) -> Self {
+        self.cells.push(cell);
+        self.children.push(child.into());
+        self
+    }
+
+    fn rows(&self) -> u16 {
+        self.cells.iter().map(|c| c.row + c.height).max().unwrap_or(0)
+    }
+}
+
+impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<'_, Message> {
+    fn children(&self) -> Vec<Tree> {
+        self.children.iter().map(Tree::new).collect()
+    }
+
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(&mut self.children);
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Shrink)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &cosmic::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let width = limits.max().width;
+        let columns = f32::from(self.columns);
+        let column_width = ((width - self.gap * (columns - 1.0)) / columns).max(1.0);
+        let rows = self.rows();
+        let height = if rows == 0 {
+            0.0
+        } else {
+            f32::from(rows) * self.row_height + f32::from(rows - 1) * self.gap
+        };
+        let nodes = self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(&self.cells)
+            .map(|((child, tree), cell)| {
+                let size = Size::new(
+                    f32::from(cell.width) * column_width + f32::from(cell.width.saturating_sub(1)) * self.gap,
+                    f32::from(cell.height) * self.row_height
+                        + f32::from(cell.height.saturating_sub(1)) * self.gap,
+                );
+                let at = Point::new(
+                    f32::from(cell.column) * (column_width + self.gap),
+                    f32::from(cell.row) * (self.row_height + self.gap),
+                );
+                child
+                    .as_widget_mut()
+                    .layout(tree, renderer, &layout::Limits::new(size, size))
+                    .move_to(at)
+            })
+            .collect();
+        layout::Node::with_children(Size::new(width, height), nodes)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &cosmic::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.container(None, layout.bounds());
+        operation.traverse(&mut |operation| {
+            self.children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+                .for_each(|((child, state), c_layout)| {
+                    child.as_widget_mut().operate(
+                        state,
+                        c_layout.with_virtual_offset(layout.virtual_offset()),
+                        renderer,
+                        operation,
+                    );
+                });
+        });
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &cosmic::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        for ((child, tree), c_layout) in self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
+            child.as_widget_mut().update(
+                tree,
+                event,
+                c_layout.with_virtual_offset(layout.virtual_offset()),
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &cosmic::Renderer,
+    ) -> mouse::Interaction {
+        self.children
+            .iter()
+            .zip(&tree.children)
+            .zip(layout.children())
+            .map(|((child, tree), c_layout)| {
+                child.as_widget().mouse_interaction(
+                    tree,
+                    c_layout.with_virtual_offset(layout.virtual_offset()),
+                    cursor,
+                    viewport,
+                    renderer,
+                )
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut cosmic::Renderer,
+        theme: &cosmic::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        for ((child, tree), c_layout) in self
+            .children
+            .iter()
+            .zip(&tree.children)
+            .zip(layout.children())
+            .filter(|(_, layout)| layout.bounds().intersects(viewport))
+        {
+            child.as_widget().draw(
+                tree,
+                renderer,
+                theme,
+                style,
+                c_layout.with_virtual_offset(layout.virtual_offset()),
+                cursor,
+                viewport,
+            );
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &cosmic::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, cosmic::Theme, cosmic::Renderer>> {
+        overlay::from_children(&mut self.children, tree, layout, renderer, viewport, translation)
+    }
+}
+
+impl<'a, Message: Clone + 'a> From<Cells<'a, Message>> for cosmic::Element<'a, Message> {
+    fn from(cells: Cells<'a, Message>) -> Self {
+        Self::new(cells)
     }
 }
 

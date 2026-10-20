@@ -3,6 +3,7 @@
 mod app;
 mod audio;
 mod bar_spacing;
+mod board;
 mod host;
 mod i18n;
 mod layout;

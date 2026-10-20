@@ -15,12 +15,11 @@ use crate::{
     services,
     widgets::{Level, inherit_colors},
     app::{App, Dnd, Message, Page},
-    bar_spacing::BarSpacing,
     media::Control,
     notifications::Notification,
     i18n::strings,
     tiles::{
-        Tile, TileState, badge, battery_icon, chip_class, edit_class, edit_container, grid, icon,
+        Tile, TileState, battery_icon, chip_class, grid, icon,
         symbolic,
     },
 };
@@ -83,7 +82,7 @@ fn note<'a>(text: &'a str) -> Element<'a, Message> {
     padded_control(widget::text::body(text)).into()
 }
 
-fn dimmed(theme: &cosmic::Theme) -> iced::widget::text::Style {
+pub(crate) fn dimmed(theme: &cosmic::Theme) -> iced::widget::text::Style {
     let mut color = theme.cosmic().background(theme.transparent).on;
     color.alpha *= 0.65;
     iced::widget::text::Style {
@@ -268,7 +267,7 @@ pub fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Messag
 }
 
 /// A round button with an icon, `size` across, like the tiles when off.
-fn circle_button<'a>(icon_name: &str, message: Message, size: f32) -> widget::Button<'a, Message> {
+pub(crate) fn circle_button<'a>(icon_name: &str, message: Message, size: f32) -> widget::Button<'a, Message> {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let component = &theme.cosmic().background(theme.transparent).component;
         button::Style {
@@ -922,372 +921,6 @@ impl App {
         )
     }
 
-    pub fn edit_page(&self) -> Element<'_, Message> {
-        let t = strings();
-        let spacing = theme::spacing();
-
-        let header = widget::row::with_children(vec![
-            circle_button("go-previous-symbolic", Message::ShowPage(Page::Main), 36.0).into(),
-            widget::text::title4(t.edit_tiles).width(Length::Fill).into(),
-            widget::tooltip(
-                button::icon(icon("edit-undo-symbolic"))
-                    .padding(8)
-                    .class(chip_class(true))
-                    .on_press(Message::ResetTiles),
-                widget::text::body(t.reset),
-                widget::tooltip::Position::Bottom,
-            )
-            .into(),
-        ])
-        .spacing(spacing.space_xs)
-        .align_y(Alignment::Center);
-
-        let items = self
-            .tiles
-            .iter()
-            .enumerate()
-            .map(|(index, placed)| {
-                let dragged = self.drag.is_some_and(|d| d.index == index && d.moved);
-                let selected = self.selected_tile == Some(index) || dragged;
-                let state = self.tile_state(placed.tile);
-                let icon_name = state.as_ref().map_or(placed.tile.icon(), |s| s.icon);
-                let mut content = widget::row::with_capacity(2)
-                    .push(widget::icon::icon(icon(icon_name)).size(20))
-                    .spacing(10)
-                    .align_y(Alignment::Center);
-                if !placed.small {
-                    content = content.push(
-                        widget::text::body(placed.tile.name())
-                            .font(cosmic::font::semibold())
-                            .ellipsize(iced::core::text::Ellipsize::End(
-                                iced::core::text::EllipsizeHeightLimit::Lines(1),
-                            )),
-                    );
-                }
-                // Press to drag it, or just click to choose it.
-                let content = widget::container(content).center_y(Length::Fill);
-                let content = if placed.small {
-                    content.center_x(Length::Fill)
-                } else {
-                    content.width(Length::Fill).padding([0, 14])
-                };
-                let body = widget::mouse_area(content.class(edit_container(selected)))
-                .on_press(Message::DragStart(index))
-                .on_enter(Message::DragOver(index))
-                .interaction(if self.drag.is_some() {
-                    iced::mouse::Interaction::Grabbing
-                } else {
-                    iced::mouse::Interaction::Grab
-                });
-                let corner = widget::container(badge("list-remove-symbolic", Message::RemoveTile(index)))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(iced::alignment::Horizontal::Right)
-                    .align_y(iced::alignment::Vertical::Top);
-                let tile: Element<'_, Message> =
-                    iced::widget::stack(vec![body.into(), corner.into()]).into();
-                (tile, placed.columns())
-            })
-            .collect();
-        let shown = widget::container(grid(items, 64.0))
-            .padding(spacing.space_xs)
-            .class(theme::Container::custom(|theme| {
-                let cosmic = theme.cosmic();
-                widget::container::Style {
-                    border: iced::Border {
-                        radius: cosmic.radius_l().into(),
-                        width: 1.0,
-                        color: cosmic.accent_color().into(),
-                    },
-                    ..Default::default()
-                }
-            }));
-
-        let mut column = widget::column::with_capacity(8)
-            .push(header)
-            .push(widget::text::caption(t.edit_hint).class(theme::Text::Custom(dimmed)))
-            .push(shown)
-            .spacing(spacing.space_s);
-
-        // Move or resize the chosen tile.
-        if let Some(placed) = self.selected_tile.and_then(|i| self.tiles.get(i).map(|p| (i, p))) {
-            let (index, placed) = placed;
-            let last = self.tiles.len() - 1;
-            let control = |icon_name: &str, label: &'static str, message: Option<Message>| -> Element<'_, Message> {
-                button::custom(
-                    widget::row::with_children(vec![
-                        widget::icon::icon(icon(icon_name)).size(16).into(),
-                        widget::text::body(label).into(),
-                    ])
-                    .spacing(spacing.space_xxs)
-                    .align_y(Alignment::Center),
-                )
-                .padding([6, 12])
-                .class(chip_class(false))
-                .on_press_maybe(message)
-                .into()
-            };
-            column = column.push(
-                widget::row::with_children(vec![
-                    widget::text::body(placed.tile.name())
-                        .font(cosmic::font::semibold())
-                        .width(Length::Fill)
-                        .into(),
-                    control("go-previous-symbolic", t.earlier, (index > 0).then_some(Message::MoveTile(index, -1))),
-                    control("go-next-symbolic", t.later, (index < last).then_some(Message::MoveTile(index, 1))),
-                    if placed.small {
-                        control("view-fullscreen-symbolic", t.large, Some(Message::ResizeTile(index)))
-                    } else {
-                        control("view-restore-symbolic", t.small, Some(Message::ResizeTile(index)))
-                    },
-                ])
-                .spacing(spacing.space_xxs)
-                .align_y(Alignment::Center),
-            );
-        }
-
-        // What can go on, as round icons with "+".
-        let missing: Vec<Tile> = Tile::ALL
-            .into_iter()
-            .filter(|tile| tile.available() && !self.tiles.iter().any(|p| p.tile == *tile))
-            .collect();
-        if !missing.is_empty() {
-            column = column.push(widget::text::heading(t.add));
-            let chips = missing
-                .into_iter()
-                .map(|tile| {
-                    let chip = button::custom(
-                        widget::container(widget::icon::icon(icon(tile.icon())).size(20))
-                            .center(Length::Fill),
-                    )
-                    .width(Length::Fixed(52.0))
-                    .height(Length::Fixed(52.0))
-                    .class(edit_class(false))
-                    .on_press(Message::AddTile(tile));
-                    let corner = widget::container(badge("list-add-symbolic", Message::AddTile(tile)))
-                        .width(Length::Fixed(60.0))
-                        .height(Length::Fixed(56.0))
-                        .align_x(iced::alignment::Horizontal::Right)
-                        .align_y(iced::alignment::Vertical::Top);
-                    let item: Element<'_, Message> = widget::column::with_children(vec![
-                        iced::widget::stack(vec![
-                            widget::container(chip)
-                                .width(Length::Fixed(60.0))
-                                .height(Length::Fixed(56.0))
-                                .align_x(iced::alignment::Horizontal::Center)
-                                .align_y(iced::alignment::Vertical::Bottom)
-                                .into(),
-                            corner.into(),
-                        ])
-                        .into(),
-                        widget::text::caption(tile.name())
-                            .align_x(iced::alignment::Horizontal::Center)
-                            .width(Length::Fill)
-                            .into(),
-                    ])
-                    .align_x(Alignment::Center)
-                    .spacing(spacing.space_xxs)
-                    .into();
-                    (item, 1)
-                })
-                .collect();
-            column = column.push(grid(chips, 104.0));
-        }
-
-        column = column.push(self.bar_icons_editor());
-        column = column.push(self.sections_editor());
-
-        // Further apart on a big screen.
-        let choices = BarSpacing::ALL.map(|choice| -> Element<'_, Message> {
-            let chosen = self.bar_spacing == choice;
-            button::custom(
-                widget::row::with_capacity(2)
-                    .push_maybe(chosen.then(|| {
-                        widget::icon::icon(icon("object-select-symbolic")).size(16)
-                    }))
-                    .push(widget::text::body(choice.name()))
-                    .spacing(spacing.space_xxs)
-                    .align_y(Alignment::Center),
-            )
-            .padding([8, 12])
-            .width(Length::Fill)
-            .class(chip_class(chosen))
-            .on_press(Message::SetBarSpacing(choice))
-            .into()
-        });
-        column = column.push(
-            widget::column::with_children(vec![
-                widget::text::body(t.bar_spacing).into(),
-                widget::row::with_children(choices)
-                    .spacing(spacing.space_xxs)
-                    .into(),
-            ])
-            .spacing(spacing.space_xs)
-            .padding([0, spacing.space_xxs]),
-        );
-        column = column.push(
-            widget::row::with_children(vec![
-                widget::space::horizontal().into(),
-                button::custom(
-                    widget::row::with_children(vec![
-                        widget::icon::icon(icon("object-select-symbolic")).size(16).into(),
-                        widget::text::body(t.done).into(),
-                    ])
-                    .spacing(spacing.space_xxs)
-                    .align_y(Alignment::Center),
-                )
-                .padding([8, 16])
-                .class(chip_class(true))
-                .on_press(Message::ShowPage(Page::Main))
-                .into(),
-            ]),
-        );
-
-        widget::scrollable(column.padding(spacing.space_s)).height(Length::Shrink).into()
-    }
-
-    /// When each icon shows on the bar: chips for always, while on, never.
-    fn bar_icons_editor(&self) -> Element<'_, Message> {
-        use crate::layout::BarItem;
-        let tx = crate::texts::texts();
-        let spacing = theme::spacing();
-        let mut column = widget::column::with_capacity(16)
-            .push(widget::text::heading(tx.bar_icons))
-            .push(widget::text::caption(tx.bar_icons_hint).class(theme::Text::Custom(dimmed)))
-            .spacing(spacing.space_xxs);
-        for item in BarItem::all() {
-            let current = self.panel_icons.get(item);
-            let chips: Vec<Element<'_, Message>> = item
-                .choices()
-                .iter()
-                .map(|&show| {
-                    button::custom(
-                        widget::container(widget::text::caption(show.name()))
-                            .center(Length::Fill)
-                            .class(inherit_colors()),
-                    )
-                    .height(Length::Fixed(28.0))
-                    .width(Length::Fill)
-                    .class(chip_class(current == show))
-                    .on_press(Message::SetBarIcon(item, show))
-                    .into()
-                })
-                .collect();
-            column = column.push(
-                widget::row::with_children(vec![
-                    widget::icon::icon(icon(item.icon())).size(16).into(),
-                    widget::text::body(item.name())
-                        .ellipsize(iced::core::text::Ellipsize::End(
-                            iced::core::text::EllipsizeHeightLimit::Lines(1),
-                        ))
-                        .width(Length::Fill)
-                        .into(),
-                    widget::row::with_children(chips)
-                        .spacing(spacing.space_xxs)
-                        .width(Length::Fixed(222.0))
-                        .into(),
-                ])
-                .spacing(spacing.space_xs)
-                .align_y(Alignment::Center),
-            );
-        }
-        column.padding([0, spacing.space_xxs]).into()
-    }
-
-    /// The popup's sections, each with a way up and down.
-    fn sections_editor(&self) -> Element<'_, Message> {
-        let t = strings();
-        let tx = crate::texts::texts();
-        let spacing = theme::spacing();
-        let last = self.layout.order.len().saturating_sub(1);
-        let mut column = widget::column::with_capacity(8)
-            .push(
-                widget::row::with_children(vec![
-                    widget::text::heading(tx.sections).width(Length::Fill).into(),
-                    widget::tooltip(
-                        button::icon(icon("edit-undo-symbolic"))
-                            .padding(6)
-                            .class(chip_class(false))
-                            .on_press(Message::ResetLayout),
-                        widget::text::body(t.reset),
-                        widget::tooltip::Position::Bottom,
-                    )
-                    .into(),
-                ])
-                .align_y(Alignment::Center),
-            )
-            .push(widget::text::caption(tx.sections_hint).class(theme::Text::Custom(dimmed)))
-            .spacing(spacing.space_xxs);
-        for (index, section) in self.layout.order.iter().copied().enumerate() {
-            let shift = |icon_name: &str, label: &'static str, by: isize, enabled: bool| -> Element<'_, Message> {
-                widget::tooltip(
-                    button::icon(icon(icon_name))
-                        .padding(6)
-                        .class(chip_class(false))
-                        .on_press_maybe(enabled.then_some(Message::ShiftSection(section, by))),
-                    widget::text::body(label),
-                    widget::tooltip::Position::Bottom,
-                )
-                .into()
-            };
-            column = column.push(
-                widget::row::with_children(vec![
-                    widget::icon::icon(icon(section.icon())).size(16).into(),
-                    widget::text::body(section.name()).width(Length::Fill).into(),
-                    shift("go-up-symbolic", tx.up, -1, index > 0),
-                    shift("go-down-symbolic", tx.down, 1, index < last),
-                ])
-                .spacing(spacing.space_xs)
-                .align_y(Alignment::Center),
-            );
-        }
-        column.padding([0, spacing.space_xxs]).into()
-    }
-
-    /// Panels, apart, as Android's shade: the controls in the order picked,
-    /// and the notifications, which get what the controls leave: the
-    /// controls stay put and only the notifications scroll.
-    pub fn main_page(&self) -> Element<'_, Message> {
-        use crate::layout::Section;
-        let mut panels: Vec<Element<'_, Message>> = Vec::new();
-        let mut controls: Vec<Element<'_, Message>> = vec![self.header()];
-        controls.extend(self.privacy_banner());
-        fn flush<'a>(controls: &mut Vec<Element<'a, Message>>, panels: &mut Vec<Element<'a, Message>>) {
-            let spacing = theme::spacing();
-            if !controls.is_empty() {
-                panels.push(panel(
-                    widget::column::with_children(std::mem::take(controls))
-                        .spacing(spacing.space_s)
-                        .padding(spacing.space_s),
-                ));
-            }
-        }
-        for section in self.layout.order.iter().copied() {
-            match section {
-                Section::Volume => controls.extend(self.volume_slider()),
-                Section::Brightness => controls.extend(self.brightness_slider()),
-                Section::Tiles => controls.push(self.tiles()),
-                Section::Media => {
-                    if let Some(card) = self.media_card() {
-                        controls.push(self.fold_header(section, section.name().to_owned(), None));
-                        if !self.layout.folded.contains(&section) {
-                            controls.push(card);
-                        }
-                    }
-                }
-                Section::Notifications => {
-                    flush(&mut controls, &mut panels);
-                    panels.push(panel(self.notifications_panel()));
-                }
-            }
-        }
-        flush(&mut controls, &mut panels);
-        // As tall as the popup's limits let it be, from the screen's height.
-        widget::column::with_children(panels)
-            .spacing(PANEL_GAP)
-            .into()
-    }
-
     /// A section's title that folds it away or opens it, with an arrow, and
     /// maybe a button of its own at the end.
     fn fold_header<'a>(
@@ -1324,7 +957,7 @@ impl App {
     }
 
     /// Who is using the camera or the microphone.
-    fn privacy_banner(&self) -> Option<Element<'_, Message>> {
+    pub(crate) fn privacy_banner(&self) -> Option<Element<'_, Message>> {
         if self.privacy.is_empty() {
             return None;
         }
@@ -1366,7 +999,7 @@ impl App {
     }
 
     /// What's playing, with its cover, progress and controls.
-    fn media_card(&self) -> Option<Element<'_, Message>> {
+    pub(crate) fn media_card(&self) -> Option<Element<'_, Message>> {
         let media = self.shown_media()?;
         let spacing = theme::spacing();
         let cover: Element<'_, Message> = match &media.art {
@@ -1558,7 +1191,7 @@ impl App {
 
     /// The notifications received, newest first, with a way to clear them;
     /// or that there are none.
-    fn notifications_panel(&self) -> Element<'_, Message> {
+    pub(crate) fn notifications_panel(&self) -> Element<'_, Message> {
         let t = strings();
         let spacing = theme::spacing();
         if self.notifications.is_empty() {
@@ -1763,7 +1396,7 @@ impl App {
             .into()
     }
 
-    fn header(&self) -> Element<'_, Message> {
+    pub(crate) fn header(&self) -> Element<'_, Message> {
         let t = strings();
         let mut row = widget::row::with_capacity(6)
             .spacing(theme::spacing().space_xs)
@@ -1818,7 +1451,7 @@ impl App {
         .into()
     }
 
-    fn volume_slider(&self) -> Option<Element<'_, Message>> {
+    pub(crate) fn volume_slider(&self) -> Option<Element<'_, Message>> {
         let volume = self.volume.as_ref()?;
         Some(Self::slider_row(
             // the icon mutes
@@ -1836,7 +1469,7 @@ impl App {
 
     /// The main monitor's brightness, over DDC; or the screen's, as COSMIC
     /// sets it. The arrow leads to every monitor's.
-    fn brightness_slider(&self) -> Option<Element<'_, Message>> {
+    pub(crate) fn brightness_slider(&self) -> Option<Element<'_, Message>> {
         let brightness_icon = || widget::icon::icon(icon("display-brightness-symbolic")).size(20);
         if let Some((index, (_, current, max))) =
             self.primary_display_index().and_then(|i| Some((i, self.displays.as_ref()?[i].ddc?)))
@@ -1856,6 +1489,27 @@ impl App {
             })
             .on_release(Message::AdjustDone),
             Message::ShowPage(Page::Displays),
+        ))
+    }
+
+    /// The main slider's level and what it sets: the main monitor's over
+    /// DDC, or the screen's.
+    pub(crate) fn brightness_level(
+        &self,
+    ) -> Option<(f32, Box<dyn Fn(f32) -> Message>, Message)> {
+        if let Some(index) = self.primary_display_index() {
+            let (_, current, max) = self.displays.as_ref()?[index].ddc?;
+            return Some((
+                current as f32 / max.max(1) as f32,
+                Box::new(move |level| Message::SetDdcBrightness(index, level * 100.0)),
+                Message::ApplyDdcBrightness(index),
+            ));
+        }
+        let (current, max) = self.brightness?;
+        Some((
+            current as f32 / max.max(1) as f32,
+            Box::new(|level| Message::SetBrightness(level * 100.0)),
+            Message::AdjustDone,
         ))
     }
 
@@ -1891,7 +1545,7 @@ impl App {
             .collect()
     }
 
-    fn tile_state(&self, tile: Tile) -> Option<TileState> {
+    pub(crate) fn tile_state(&self, tile: Tile) -> Option<TileState> {
         let t = strings();
         Some(match tile {
             Tile::Wifi => {
@@ -2129,19 +1783,6 @@ impl App {
                 )
             }
         })
-    }
-
-    fn tiles(&self) -> Element<'_, Message> {
-        let items = self
-            .tiles
-            .iter()
-            .filter_map(|placed| {
-                let state = self.tile_state(placed.tile)?;
-                let element = if placed.small { state.small() } else { state.large() };
-                Some((element, placed.columns()))
-            })
-            .collect();
-        grid(items, 64.0)
     }
 }
 
