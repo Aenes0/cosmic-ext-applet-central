@@ -480,9 +480,7 @@ fn default_tiles() -> Vec<Placed> {
         at(Kind::Tile(Tile::Screenshot), Icon),
         at(Kind::Tile(Tile::Microphone), Icon),
         at(Kind::Tile(Tile::Workspaces), Icon),
-        at(Kind::Tile(Tile::Settings), Icon),
         at(Kind::Tile(Tile::Lock), Icon),
-        at(Kind::Tile(Tile::Session), Icon),
     ]
 }
 
@@ -506,7 +504,7 @@ fn load_tiles() -> Vec<Placed> {
     if !layout::actions_ready() {
         let end = items.iter().position(|p| p.kind == Kind::Bubble).unwrap_or(items.len());
         let mut at = end;
-        for tile in [Tile::Screenshot, Tile::Settings, Tile::Lock, Tile::Session] {
+        for tile in [Tile::Screenshot, Tile::Lock] {
             if !items.iter().any(|p| p.kind == Kind::Tile(tile)) {
                 items.insert(at, Placed { kind: Kind::Tile(tile), fit: crate::tiles::Fit::Icon });
                 at += 1;
@@ -515,6 +513,12 @@ fn load_tiles() -> Vec<Placed> {
         let ids: Vec<String> = items.iter().map(|t| t.id()).collect();
         services::set_tiles(&ids);
         layout::set_actions_ready();
+    }
+    // Settings and power went back to the header, as small icons.
+    if items.iter().any(|p| matches!(p.kind, Kind::Tile(Tile::Settings | Tile::Session))) {
+        items.retain(|p| !matches!(p.kind, Kind::Tile(Tile::Settings | Tile::Session)));
+        let ids: Vec<String> = items.iter().map(|t| t.id()).collect();
+        services::set_tiles(&ids);
     }
     items
 }

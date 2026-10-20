@@ -131,8 +131,9 @@ impl App {
         let mut bottom = Vec::with_capacity(4);
         for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
             let mut rows: Vec<Element<'_, Message>> = Vec::new();
+            // The first bubble's header, the edit pencil, close over the grid.
+            let header = (number == 0 && !editing).then(|| self.header());
             if number == 0 && !editing {
-                rows.push(self.header());
                 rows.extend(self.privacy_banner());
             }
             if editing {
@@ -156,11 +157,13 @@ impl App {
             if rows.is_empty() {
                 continue;
             }
-            bottom.push(panel(
-                widget::column::with_children(rows)
-                    .spacing(spacing.space_s)
-                    .padding(spacing.space_m),
-            ));
+            let content = widget::column::with_children(rows).spacing(spacing.space_s);
+            bottom.push(panel(match header {
+                Some(header) => widget::column::with_children(vec![header, content.into()])
+                    .spacing(2)
+                    .padding([spacing.space_xxs, spacing.space_m, spacing.space_m, spacing.space_m]),
+                None => content.padding(spacing.space_m),
+            }));
         }
         // Room for one more bubble: a thin one under the last, that makes it.
         if editing {
@@ -189,7 +192,8 @@ impl App {
         for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
             let mut bubble_height = padding;
             if number == 0 && !editing {
-                bubble_height += 36.0 + gap;
+                let top = f32::from(theme::spacing().space_m - theme::spacing().space_xxs);
+                bubble_height += if self.battery.is_some() { 36.0 } else { 18.0 } + 2.0 - top;
                 if !self.privacy.is_empty() {
                     bubble_height += 48.0 + gap;
                 }
@@ -432,7 +436,7 @@ impl App {
             kind => kind.icon(),
         };
         let mut content = widget::row::with_capacity(3)
-            .push(widget::icon::icon(icon(icon_name)).size(16))
+            .push(widget::icon::icon(icon(icon_name)).size(18))
             .spacing(10)
             .align_y(Alignment::Center);
         if matches!(placed.fit, Fit::Pill | Fit::Horizontal) {
@@ -814,7 +818,7 @@ fn icon_tile<'a>(state: TileState) -> Element<'a, Message> {
         None => state.title.to_owned(),
     };
     let surface = Surface::new(
-        widget::container(widget::icon::icon(icon(state.icon)).size(16))
+        widget::container(widget::icon::icon(icon(state.icon)).size(18))
             .center(Length::Fill)
             .class(inherit_colors()),
         state.on,
@@ -840,7 +844,7 @@ fn short_tile<'a>(state: TileState) -> Element<'a, Message> {
         None => state.title.to_owned(),
     };
     let pill = split(
-        widget::icon::icon(icon(state.icon)).size(16).into(),
+        widget::icon::icon(icon(state.icon)).size(18).into(),
         true,
         state.on,
         state.toggle,

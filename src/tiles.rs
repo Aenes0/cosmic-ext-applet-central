@@ -176,7 +176,13 @@ impl Kind {
     /// Everything there can be, the sliders and media first.
     pub fn all() -> Vec<Kind> {
         let mut all = vec![Kind::Brightness];
-        all.extend(Tile::ALL.into_iter().filter(|t| t.available()).map(Kind::Tile));
+        // Settings and power are in the header, not on the grid.
+        all.extend(
+            Tile::ALL
+                .into_iter()
+                .filter(|t| t.available() && !matches!(t, Tile::Settings | Tile::Session))
+                .map(Kind::Tile),
+        );
         all
     }
 
@@ -585,7 +591,7 @@ pub fn tile<'a>(
         text = text.push(widget::text::caption(subtitle).ellipsize(one_line()));
     }
     let content = widget::row::with_capacity(2)
-        .push(widget::icon::icon(icon(icon_name)).size(16))
+        .push(widget::icon::icon(icon(icon_name)).size(18))
         .push(text.width(Length::Fill))
         .spacing(12)
         .align_y(Alignment::Center);

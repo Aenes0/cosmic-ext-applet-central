@@ -1558,16 +1558,28 @@ impl App {
         }
         row = row.push(widget::space::horizontal());
         // Only editing here: the rest are icons on the grid.
-        let edit = widget::tooltip(
-            button::icon(icon("document-edit-symbolic"))
-                .icon_size(14)
-                .padding(6)
-                .class(theme::Button::Text)
-                .on_press(Message::ShowPage(Page::Edit)),
-            widget::text::body(t.edit),
-            widget::tooltip::Position::Bottom,
-        );
-        row.push(edit).into()
+        // Small and loose, at the end: settings, power, editing.
+        let small = |name: &'static str, tooltip: &'static str, message: Message| {
+            widget::tooltip(
+                button::icon(icon(name))
+                    .icon_size(12)
+                    .padding(3)
+                    .class(theme::Button::Text)
+                    .on_press(message),
+                widget::text::body(tooltip),
+                widget::tooltip::Position::Bottom,
+            )
+        };
+        // A thin line, unless the battery's pill needs the room.
+        let row = row
+            .push(small("emblem-system-symbolic", t.settings, Message::Settings(None)))
+            .push(small("system-shutdown-symbolic", t.session, Message::ShowPage(Page::Session)))
+            .push(small("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)));
+        if self.battery.is_some() {
+            row.into()
+        } else {
+            row.height(Length::Fixed(18.0)).into()
+        }
     }
 
     /// A thick slider, as phones have them, with a round arrow to its page.
