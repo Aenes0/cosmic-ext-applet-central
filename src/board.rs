@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The popup's main page as One UI draws its quick panel: everything on one
-//! grid of five columns — tiles as icons, short pills or pills, the sliders
-//! standing or across, what's playing — and edited in place: the grid stays,
-//! each item gets a "−", a tap picks it to resize, and what can be added
-//! shows under it.
+//! The popup's main page as One UI draws its quick panel: the controls on
+//! grids of five columns — tiles as icons, short pills or pills, brightness
+//! standing or across — in up to three bubbles, each in groups between thin
+//! lines; and edited in place: the panel stays, each item gets a "−", a tap
+//! picks it, a handle resizes it, each bubble a "+", and the rest of the
+//! editing, with saving it, opens at the panel's left.
 
 use cosmic::{
     Element,
@@ -55,8 +56,48 @@ pub fn bar_item(kind: Kind) -> Option<BarItem> {
     match kind {
         Kind::Tile(crate::tiles::Tile::Wifi) => Some(BarItem::Network),
         Kind::Tile(tile) => Some(BarItem::Tile(tile)),
-        Kind::Brightness => None,
+        Kind::Brightness | Kind::Divider | Kind::Bubble => None,
     }
+}
+
+/// The editing sidebar's width.
+pub const SIDEBAR: f32 = 300.0;
+
+/// One part of a bubble: a group of items on a grid, or the line before the
+/// next group (by its index in the list).
+enum Part {
+    Group(Vec<(usize, Placed)>),
+    Line(usize),
+}
+
+/// A bubble: the index of the break that starts it (none for the first),
+/// and its parts.
+struct Bubble {
+    start: Option<usize>,
+    parts: Vec<Part>,
+}
+
+fn split_bubbles(items: &[Placed]) -> Vec<Bubble> {
+    let mut bubbles = vec![Bubble { start: None, parts: vec![Part::Group(Vec::new())] }];
+    for (index, placed) in items.iter().copied().enumerate() {
+        let bubble = bubbles.last_mut().unwrap();
+        match placed.kind {
+            Kind::Bubble => bubbles.push(Bubble {
+                start: Some(index),
+                parts: vec![Part::Group(Vec::new())],
+            }),
+            Kind::Divider => {
+                bubble.parts.push(Part::Line(index));
+                bubble.parts.push(Part::Group(Vec::new()));
+            }
+            _ => {
+                if let Some(Part::Group(group)) = bubble.parts.last_mut() {
+                    group.push((index, placed));
+                }
+            }
+        }
+    }
+    bubbles
 }
 
 impl App {
@@ -70,43 +111,55 @@ impl App {
 
     fn board(&self, editing: bool) -> Element<'_, Message> {
         let spacing = theme::spacing();
-        let mut controls: Vec<Element<'_, Message>> =
-            vec![if editing { self.edit_header() } else { self.header() }];
-        if !editing {
-            controls.extend(self.privacy_banner());
-        }
-        controls.push(self.grid(editing));
-        if editing {
-            controls.extend(self.edit_tools());
-        }
-        let controls = panel(
-            widget::column::with_children(controls)
-                .spacing(spacing.space_s)
-                .padding(spacing.space_m),
-        );
-        // The notifications on top, as Windows 11; the controls; what's
-        // playing at the bottom, by the bar, with the volume.
-        let mut panels = Vec::with_capacity(3);
+        let mut panels = Vec::with_capacity(5);
+        // The notifications on top, as Windows 11; the controls' bubbles;
+        // what's playing at the bottom, by the bar, with the volume.
         if !editing {
             panels.push(panel(self.notifications_panel()));
         }
-        panels.push(controls);
+        for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
+            let mut rows: Vec<Element<'_, Message>> = Vec::new();
+            if number == 0 && !editing {
+                rows.push(self.header());
+                rows.extend(self.privacy_banner());
+            }
+            if editing {
+                rows.push(self.bubble_title(number, bubble.start));
+            }
+            for part in bubble.parts {
+                match part {
+                    Part::Group(items) => {
+                        if let Some(grid) = self.grid(&items, editing) {
+                            rows.push(grid);
+                        }
+                    }
+                    Part::Line(index) => rows.push(self.line(index, editing)),
+                }
+            }
+            if editing {
+                rows.push(self.add_here(number));
+            }
+            // A bubble left empty shows nothing, but while editing.
+            if rows.is_empty() {
+                continue;
+            }
+            panels.push(panel(
+                widget::column::with_children(rows)
+                    .spacing(spacing.space_s)
+                    .padding(spacing.space_m),
+            ));
+        }
         if !editing {
             panels.push(panel(self.media_panel()));
         }
-        let column = widget::column::with_children(panels).spacing(PANEL_GAP);
-        if editing {
-            // The tools under the grid may outgrow the screen.
-            widget::scrollable(column).height(Length::Shrink).into()
-        } else {
-            column.into()
-        }
+        widget::column::with_children(panels).spacing(PANEL_GAP).into()
     }
 
-    /// The grid; while editing every item shows, plain, to move or take off.
-    fn grid(&self, editing: bool) -> Element<'_, Message> {
+    /// A group of items on a grid; while editing every one shows, plain, to
+    /// move or take off.
+    fn grid(&self, items: &[(usize, Placed)], editing: bool) -> Option<Element<'_, Message>> {
         let mut shown: Vec<((u16, u16), u64, Element<'_, Message>)> = Vec::new();
-        for (index, placed) in self.tiles.iter().copied().enumerate() {
+        for &(index, placed) in items {
             let element = if editing {
                 Some(self.edit_item(index, placed))
             } else {
@@ -116,12 +169,82 @@ impl App {
                 shown.push((placed.fit.span(), key(placed.kind), element));
             }
         }
+        if shown.is_empty() {
+            return None;
+        }
         let sizes: Vec<(u16, u16)> = shown.iter().map(|(size, ..)| *size).collect();
         let mut cells = Cells::new(COLUMNS, ROW, gap());
         for (cell, (_, key, element)) in pack(&sizes).into_iter().zip(shown) {
             cells = cells.push_keyed(key, cell, element);
         }
-        cells.into()
+        Some(cells.into())
+    }
+
+    /// A thin line between groups; while editing, one to drag or take off.
+    fn line(&self, index: usize, editing: bool) -> Element<'_, Message> {
+        if !editing {
+            return widget::divider::horizontal::default().into();
+        }
+        let selected = self.drag.is_some_and(|d| d.index == index && d.moved);
+        self.marker(index, widget::divider::horizontal::default().into(), selected)
+    }
+
+    /// While editing, a bubble's title: the first's name; the others', from
+    /// their break, to drag or take off.
+    fn bubble_title(&self, number: usize, start: Option<usize>) -> Element<'_, Message> {
+        let tx = texts();
+        let title = widget::row::with_children(vec![
+            widget::icon::icon(icon("window-new-symbolic")).size(14).into(),
+            widget::text::caption(format!("{} {}", tx.bubble_word, number + 1)).into(),
+        ])
+        .spacing(6)
+        .align_y(Alignment::Center);
+        match start {
+            None => widget::container(title).padding([0, 4]).into(),
+            Some(index) => self.marker(index, title.into(), false),
+        }
+    }
+
+    /// A line's or a break's handle while editing: pressed, it drags; its
+    /// "−" takes it off.
+    fn marker<'a>(&'a self, index: usize, content: Element<'a, Message>, selected: bool) -> Element<'a, Message> {
+        let body = widget::mouse_area(
+            widget::container(content)
+                .center_y(Length::Fixed(24.0))
+                .width(Length::Fill)
+                .padding([0, 12])
+                .class(edit_container(selected)),
+        )
+        .on_press(Message::DragStart(index))
+        .on_release(Message::DragEnd)
+        .on_enter(Message::DragOver(index))
+        .interaction(iced::mouse::Interaction::Grab);
+        widget::row::with_children(vec![
+            body.into(),
+            badge("list-remove-symbolic", Message::RemoveTile(index)),
+        ])
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    }
+
+    /// A bubble's "+" while editing: where the sidebar adds.
+    fn add_here(&self, number: usize) -> Element<'_, Message> {
+        let tx = texts();
+        let target = self.add_target == number;
+        button::custom(
+            widget::row::with_children(vec![
+                widget::icon::icon(icon("list-add-symbolic")).size(16).into(),
+                widget::text::caption(if target { tx.adding_here } else { tx.add_here }).into(),
+            ])
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([8, 14])
+        .width(Length::Fill)
+        .class(edit_class(target))
+        .on_press(Message::AddTarget(number))
+        .into()
     }
 
     /// An item as it works; nothing for what isn't there, like media when
@@ -164,6 +287,8 @@ impl App {
                     self.brightness_slider()
                 }
             }
+            // Drawn by the bubbles, not on the grid.
+            Kind::Divider | Kind::Bubble => None,
         }
     }
 
@@ -232,47 +357,14 @@ impl App {
         iced::widget::stack(layers).into()
     }
 
-    /// Editing's title row: back to the controls, start over, done.
-    fn edit_header(&self) -> Element<'_, Message> {
-        let t = strings();
-        let spacing = theme::spacing();
-        widget::row::with_children(vec![
-            widget::text::title4(t.edit).width(Length::Fill).into(),
-            widget::tooltip(
-                button::icon(icon("edit-undo-symbolic"))
-                    .padding(8)
-                    .class(chip_class(false))
-                    .on_press(Message::ResetTiles),
-                widget::text::body(t.reset),
-                widget::tooltip::Position::Bottom,
-            )
-            .into(),
-            button::custom(
-                widget::row::with_children(vec![
-                    widget::icon::icon(icon("object-select-symbolic")).size(16).into(),
-                    widget::text::body(t.done).into(),
-                ])
-                .spacing(spacing.space_xxs)
-                .align_y(Alignment::Center),
-            )
-            .padding([8, 16])
-            .class(chip_class(true))
-            .on_press(Message::ShowPage(Page::Main))
-            .into(),
-        ])
-        .spacing(spacing.space_xs)
-        .align_y(Alignment::Center)
-        .into()
-    }
-
-    /// Under the grid while editing: the picked item's size and its icon on
-    /// the bar; what can be added; what shows only on the bar.
-    fn edit_tools(&self) -> Vec<Element<'_, Message>> {
+    /// Editing's sidebar, at the panel's left: saving or not; the picked
+    /// item's size and its icon on the bar; what can be added; what shows
+    /// only on the bar; the bar's spacing; starting over.
+    pub fn edit_sidebar(&self) -> Element<'_, Message> {
         let t = strings();
         let tx = texts();
         let spacing = theme::spacing();
         let mut tools: Vec<Element<'_, Message>> = Vec::new();
-
         let chips = |choices: Vec<(&'static str, bool, Message)>| -> Element<'_, Message> {
             widget::row::with_children(
                 choices
@@ -294,13 +386,37 @@ impl App {
             widget::text::caption(text).class(theme::Text::Custom(dimmed)).into()
         };
 
+        // Title, cancel and save.
+        tools.push(
+            widget::row::with_children(vec![
+                widget::text::title4(tx.editing).width(Length::Fill).into(),
+                button::custom(widget::text::body(tx.cancel))
+                    .padding([8, 14])
+                    .class(chip_class(false))
+                    .on_press(Message::CancelEdit)
+                    .into(),
+                button::custom(
+                    widget::row::with_children(vec![
+                        widget::icon::icon(icon("object-select-symbolic")).size(16).into(),
+                        widget::text::body(tx.save).into(),
+                    ])
+                    .spacing(spacing.space_xxs)
+                    .align_y(Alignment::Center),
+                )
+                .padding([8, 14])
+                .class(chip_class(true))
+                .on_press(Message::SaveEdit)
+                .into(),
+            ])
+            .spacing(spacing.space_xxs)
+            .align_y(Alignment::Center)
+            .into(),
+        );
+
+        // The item picked.
         match self.selected_tile.and_then(|i| Some((i, *self.tiles.get(i)?))) {
-            Some((index, placed)) => {
-                tools.push(
-                    widget::text::body(placed.kind.name())
-                        .font(cosmic::font::semibold())
-                        .into(),
-                );
+            Some((index, placed)) if !placed.kind.splits() => {
+                tools.push(widget::text::heading(placed.kind.name()).into());
                 if placed.kind.fits().len() > 1 {
                     tools.push(label(tx.size));
                     tools.push(chips(
@@ -323,52 +439,48 @@ impl App {
                     ));
                 }
             }
-            None => tools.push(label(tx.tap_to_adjust)),
+            _ => tools.push(label(tx.selected_none)),
         }
+        tools.push(widget::divider::horizontal::default().into());
 
-        // What can go on, as round icons with "+".
+        // What can go in the bubble picked by its "+".
+        tools.push(
+            widget::text::heading(format!("{} {}", tx.add_to, self.add_target + 1)).into(),
+        );
         let missing: Vec<Kind> = Kind::all()
             .into_iter()
             .filter(|kind| !self.tiles.iter().any(|p| p.kind == *kind))
+            .chain([Kind::Divider, Kind::Bubble])
             .collect();
-        if !missing.is_empty() {
-            tools.push(widget::text::heading(t.add).into());
-            let mut cells = Cells::new(COLUMNS, 84.0, gap());
-            for (n, kind) in missing.into_iter().enumerate() {
-                let n = n as u16;
-                let chip = button::custom(
+        let add_chip = |kind: Kind| -> Element<'_, Message> {
+            let mut trial = self.tiles.clone();
+            trial.insert(self.insert_at(self.add_target, kind), Placed::new(kind));
+            let allowed = crate::tiles::within_limits(&trial);
+            widget::column::with_children(vec![
+                button::custom(
                     widget::container(widget::icon::icon(icon(kind.icon())).size(20))
                         .center(Length::Fill),
                 )
-                .width(Length::Fixed(48.0))
-                .height(Length::Fixed(48.0))
+                .width(Length::Fixed(44.0))
+                .height(Length::Fixed(44.0))
                 .class(edit_class(false))
-                .on_press(Message::AddItem(kind));
-                let item: Element<'_, Message> = widget::column::with_children(vec![
-                    chip.into(),
-                    widget::text::caption(kind.name())
-                        .align_x(iced::alignment::Horizontal::Center)
-                        .width(Length::Fill)
-                        .ellipsize(iced::core::text::Ellipsize::End(
-                            iced::core::text::EllipsizeHeightLimit::Lines(2),
-                        ))
-                        .into(),
-                ])
-                .align_x(Alignment::Center)
-                .spacing(spacing.space_xxs)
-                .into();
-                cells = cells.push(
-                    crate::widgets::Cell {
-                        column: n % COLUMNS,
-                        row: n / COLUMNS,
-                        width: 1,
-                        height: 1,
-                    },
-                    item,
-                );
-            }
-            tools.push(cells.into());
-        }
+                .on_press_maybe(allowed.then_some(Message::AddItem(kind)))
+                .into(),
+                widget::text::caption(kind.name())
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .width(Length::Fill)
+                    .ellipsize(iced::core::text::Ellipsize::End(
+                        iced::core::text::EllipsizeHeightLimit::Lines(2),
+                    ))
+                    .into(),
+            ])
+            .align_x(Alignment::Center)
+            .spacing(spacing.space_xxs)
+            .into()
+        };
+        tools.push(small_grid(missing.into_iter().map(add_chip).collect(), 80.0));
+        tools.push(label(tx.limit));
+        tools.push(widget::divider::horizontal::default().into());
 
         // Icons with no place on the grid: a tap goes always, while on, never.
         let in_grid = |kind: Kind| self.tiles.iter().any(|p| p.kind == kind);
@@ -382,41 +494,37 @@ impl App {
         // The volume lives with what's playing, never on the grid.
         bar_only.push(BarItem::Volume);
         tools.push(widget::text::heading(tx.bar_only).into());
-        let mut cells = Cells::new(COLUMNS, 64.0, gap());
-        for (n, item) in bar_only.into_iter().enumerate() {
-            let n = n as u16;
-            let show = self.panel_icons.get(item);
-            let choices = item.choices();
-            let next = choices[(choices.iter().position(|s| *s == show).unwrap_or(0) + 1) % choices.len()];
-            let card = button::custom(
-                widget::container(
-                    widget::column::with_children(vec![
-                        widget::icon::icon(icon(item.icon())).size(20).into(),
-                        widget::text::caption(show.name()).into(),
-                    ])
-                    .align_x(Alignment::Center)
-                    .spacing(4),
+        let cards = bar_only
+            .into_iter()
+            .map(|item| -> Element<'_, Message> {
+                let show = self.panel_icons.get(item);
+                let choices = item.choices();
+                let next = choices
+                    [(choices.iter().position(|s| *s == show).unwrap_or(0) + 1) % choices.len()];
+                let card = button::custom(
+                    widget::container(
+                        widget::column::with_children(vec![
+                            widget::icon::icon(icon(item.icon())).size(20).into(),
+                            widget::text::caption(show.name()).into(),
+                        ])
+                        .align_x(Alignment::Center)
+                        .spacing(4),
+                    )
+                    .center(Length::Fill),
                 )
-                .center(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(0)
-            .class(edit_class(show != Show::Never))
-            .on_press(Message::SetBarIcon(item, next));
-            cells = cells.push(
-                crate::widgets::Cell {
-                    column: n % COLUMNS,
-                    row: n / COLUMNS,
-                    width: 1,
-                    height: 1,
-                },
-                widget::tooltip(card, widget::text::body(item.name()), widget::tooltip::Position::Bottom),
-            );
-        }
-        tools.push(cells.into());
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(0)
+                .class(edit_class(show != Show::Never))
+                .on_press(Message::SetBarIcon(item, next));
+                widget::tooltip(card, widget::text::body(item.name()), widget::tooltip::Position::Bottom)
+                    .into()
+            })
+            .collect();
+        tools.push(small_grid(cards, 60.0));
+        tools.push(widget::divider::horizontal::default().into());
 
-        // Further apart on a big screen.
+        // Further apart on a big screen; and back to how it came.
         tools.push(widget::text::heading(t.bar_spacing).into());
         tools.push(chips(
             crate::bar_spacing::BarSpacing::ALL
@@ -424,8 +532,60 @@ impl App {
                 .map(|choice| (choice.name(), self.bar_spacing == choice, Message::SetBarSpacing(choice)))
                 .collect(),
         ));
-        tools
+        tools.push(
+            button::custom(
+                widget::row::with_children(vec![
+                    widget::icon::icon(icon("edit-undo-symbolic")).size(16).into(),
+                    widget::text::body(t.reset).into(),
+                ])
+                .spacing(spacing.space_xxs)
+                .align_y(Alignment::Center),
+            )
+            .padding([8, 14])
+            .class(chip_class(false))
+            .on_press(Message::ResetTiles)
+            .into(),
+        );
+
+        panel(
+            widget::scrollable(
+                widget::column::with_children(tools)
+                    .spacing(spacing.space_s)
+                    .padding(spacing.space_m),
+            )
+            .height(Length::Shrink),
+        )
     }
+
+    /// Where an item added to a bubble goes: at its end, before the next
+    /// bubble's break.
+    pub(crate) fn insert_at(&self, bubble: usize, _kind: Kind) -> usize {
+        self.tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.kind == Kind::Bubble)
+            .nth(bubble)
+            .map_or(self.tiles.len(), |(index, _)| index)
+    }
+}
+
+/// Small items in rows of four, in the sidebar.
+fn small_grid<'a>(items: Vec<Element<'a, Message>>, height: f32) -> Element<'a, Message> {
+    const PER_ROW: u16 = 4;
+    let mut cells = Cells::new(PER_ROW, height, gap());
+    for (n, item) in items.into_iter().enumerate() {
+        let n = n as u16;
+        cells = cells.push(
+            crate::widgets::Cell {
+                column: n % PER_ROW,
+                row: n / PER_ROW,
+                width: 1,
+                height: 1,
+            },
+            item,
+        );
+    }
+    cells.into()
 }
 
 /// A tile as a round icon: a click toggles, a right click opens its page,

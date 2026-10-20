@@ -13,6 +13,17 @@ pub struct Texts {
     pub brightness: &'static str,
     pub main_display: &'static str,
     pub set_main: &'static str,
+    pub divider: &'static str,
+    pub bubble: &'static str,
+    pub save: &'static str,
+    pub cancel: &'static str,
+    pub editing: &'static str,
+    pub add_to: &'static str,
+    pub selected_none: &'static str,
+    pub limit: &'static str,
+    pub bubble_word: &'static str,
+    pub add_here: &'static str,
+    pub adding_here: &'static str,
     pub nothing_playing: &'static str,
     pub fold: &'static str,
     pub unfold: &'static str,
@@ -24,7 +35,6 @@ pub struct Texts {
     pub bar_only: &'static str,
     pub on_bar: &'static str,
     pub size: &'static str,
-    pub tap_to_adjust: &'static str,
 }
 
 const PT: Texts = Texts {
@@ -37,6 +47,17 @@ const PT: Texts = Texts {
     brightness: "Brilho",
     main_display: "Monitor principal",
     set_main: "Tornar principal",
+    divider: "Divisória",
+    bubble: "Nova bolha",
+    save: "Salvar",
+    cancel: "Cancelar",
+    editing: "Editar",
+    add_to: "Adicionar na bolha",
+    selected_none: "Toque num item do painel para ajustar como ele aparece na barra. Arraste para mudar de lugar; arraste a alça para mudar o tamanho.",
+    limit: "Até 3 bolhas, com até 2 divisórias cada",
+    bubble_word: "Bolha",
+    add_here: "Adicionar aqui",
+    adding_here: "Adicionando aqui (veja à esquerda)",
     nothing_playing: "Nada tocando",
     fold: "Recolher",
     unfold: "Expandir",
@@ -48,7 +69,6 @@ const PT: Texts = Texts {
     bar_only: "Só na barra",
     on_bar: "Na barra",
     size: "Tamanho",
-    tap_to_adjust: "Toque num item para ajustar, arraste para mudar de lugar",
 };
 
 const EN: Texts = Texts {
@@ -61,6 +81,17 @@ const EN: Texts = Texts {
     brightness: "Brightness",
     main_display: "Main monitor",
     set_main: "Make main",
+    divider: "Divider",
+    bubble: "New bubble",
+    save: "Save",
+    cancel: "Cancel",
+    editing: "Edit",
+    add_to: "Add to bubble",
+    selected_none: "Tap an item in the panel to set how it shows on the bar. Drag to move it; drag the handle to resize it.",
+    limit: "Up to 3 bubbles, with up to 2 dividers each",
+    bubble_word: "Bubble",
+    add_here: "Add here",
+    adding_here: "Adding here (see the left)",
     nothing_playing: "Nothing playing",
     fold: "Fold",
     unfold: "Unfold",
@@ -72,7 +103,6 @@ const EN: Texts = Texts {
     bar_only: "Panel only",
     on_bar: "On the panel",
     size: "Size",
-    tap_to_adjust: "Tap an item to adjust it, drag it to move it",
 };
 
 pub fn texts() -> &'static Texts {

@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use cosmic::iced::Length;
+
 use cosmic::{
     Element, Task, app,
     iced::{
@@ -104,6 +106,11 @@ pub enum Message {
     /// An item's resize handle dragged this far across since pressed; let go.
     ResizeDrag(usize, f32),
     ResizeEnd,
+    /// While editing: the bubble whose "+" was pressed, where adding goes.
+    AddTarget(usize),
+    /// Keeps the arrangement edited, or goes back to how it was.
+    SaveEdit,
+    CancelEdit,
     AddItem(Kind),
     /// The monitor the main brightness slider sets, by connector.
     SetPrimaryDisplay(String),
@@ -277,6 +284,10 @@ pub struct App {
     pub(crate) primary_display: Option<String>,
     /// The item being resized by its handle, and its size when grabbed.
     resizing: Option<(usize, Fit)>,
+    /// The arrangement as it was when editing began: back to it on cancel.
+    before_edit: Option<Vec<Placed>>,
+    /// The bubble the sidebar adds to.
+    pub(crate) add_target: usize,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
     /// The panel button's size, all its icons.
@@ -360,6 +371,7 @@ impl App {
 
     fn close_popup(&mut self) -> app::Task<Message> {
         self.mark_seen();
+        self.leave_edit(false);
         self.page = None;
         match self.popup.take() {
             Some(id) => destroy_popup(id),
@@ -377,7 +389,27 @@ impl App {
         self.media_outputs = false;
     }
 
+    /// Out of editing: keeping what was arranged, or back to how it was.
+    fn leave_edit(&mut self, keep: bool) {
+        let Some(before) = self.before_edit.take() else {
+            return;
+        };
+        if keep {
+            // Saved now, with editing over.
+            let ids: Vec<String> = self.tiles.iter().map(|t| t.id()).collect();
+            services::set_tiles(&ids);
+        } else {
+            self.tiles = before;
+        }
+        self.drag = None;
+        self.resizing = None;
+    }
+
     fn save_tiles(&self) {
+        // While editing, kept until saved.
+        if self.before_edit.is_some() {
+            return;
+        }
         let ids: Vec<String> = self.tiles.iter().map(|t| t.id()).collect();
         services::set_tiles(&ids);
     }
@@ -544,7 +576,8 @@ fn connect_vpn(vpn: services::Vpn) -> app::Task<Message> {
 fn popup_limits(max_height: f32) -> Limits {
     Limits::NONE
         .min_width(WIDTH)
-        .max_width(WIDTH)
+        // Wider while editing, with the sidebar at the left.
+        .max_width(WIDTH + crate::board::SIDEBAR + pages::PANEL_GAP)
         .min_height(1.0)
         .max_height(max_height)
 }
@@ -699,10 +732,19 @@ impl cosmic::Application for App {
                 }
             }
             Message::AddItem(kind) => {
-                if !self.tiles.iter().any(|p| p.kind == kind) {
-                    self.tiles.push(Placed::new(kind));
-                    self.selected_tile = Some(self.tiles.len() - 1);
-                    self.save_tiles();
+                // Lines and breaks can repeat, the rest go on once.
+                if kind.splits() || !self.tiles.iter().any(|p| p.kind == kind) {
+                    let at = self.insert_at(self.add_target, kind);
+                    let mut trial = self.tiles.clone();
+                    trial.insert(at, Placed::new(kind));
+                    if crate::tiles::within_limits(&trial) {
+                        self.tiles = trial;
+                        self.selected_tile = (!kind.splits()).then_some(at);
+                        if kind == Kind::Bubble {
+                            self.add_target += 1;
+                        }
+                        self.save_tiles();
+                    }
                 }
             }
             Message::SetPrimaryDisplay(name) => {
@@ -712,14 +754,33 @@ impl cosmic::Application for App {
             Message::Closed(id) => {
                 if self.popup == Some(id) {
                     self.mark_seen();
+                    self.leave_edit(false);
                     self.popup = None;
                     self.page = None;
                 }
             }
             Message::ShowPage(page) => {
+                if page == Page::Edit && self.page != Some(Page::Edit) {
+                    self.before_edit = Some(self.tiles.clone());
+                    self.add_target = 0;
+                } else if page != Page::Edit && self.page == Some(Page::Edit) {
+                    // Away from editing without saving: as it was.
+                    self.leave_edit(false);
+                }
                 self.page = Some(page);
                 self.selected_tile = None;
                 return self.load(page);
+            }
+            Message::AddTarget(bubble) => self.add_target = bubble,
+            Message::SaveEdit => {
+                self.leave_edit(true);
+                self.page = Some(Page::Main);
+                self.selected_tile = None;
+            }
+            Message::CancelEdit => {
+                self.leave_edit(false);
+                self.page = Some(Page::Main);
+                self.selected_tile = None;
             }
             Message::Update(update) => match update {
                 Update::Network(network) => {
@@ -970,7 +1031,7 @@ impl cosmic::Application for App {
             Message::SettingsChanged => {
                 // What another screen's applet saved; not while this one is
                 // in the middle of moving or resizing an item.
-                if self.drag.is_none() && self.resizing.is_none() {
+                if self.drag.is_none() && self.resizing.is_none() && self.before_edit.is_none() {
                     let tiles = load_tiles();
                     if tiles != self.tiles {
                         self.tiles = tiles;
@@ -1266,11 +1327,16 @@ impl cosmic::Application for App {
                 // The others make way as it passes over them.
                 if let Some(drag) = self.drag.as_mut() {
                     if drag.index != index && index < self.tiles.len() {
-                        let placed = self.tiles.remove(drag.index);
-                        self.tiles.insert(index, placed);
-                        drag.index = index;
-                        drag.moved = true;
-                        self.selected_tile = None;
+                        let mut trial = self.tiles.clone();
+                        let placed = trial.remove(drag.index);
+                        trial.insert(index, placed);
+                        // Not where it'd make a fourth bubble or a third line.
+                        if crate::tiles::within_limits(&trial) {
+                            self.tiles = trial;
+                            drag.index = index;
+                            drag.moved = true;
+                            self.selected_tile = None;
+                        }
                     }
                 }
             }
@@ -1289,9 +1355,15 @@ impl cosmic::Application for App {
             }
             Message::RemoveTile(index) => {
                 if index < self.tiles.len() {
-                    self.tiles.remove(index);
-                    self.selected_tile = None;
-                    self.save_tiles();
+                    let mut trial = self.tiles.clone();
+                    trial.remove(index);
+                    // Taking a bubble's break off joins two bubbles: not if
+                    // that makes too many lines in one.
+                    if crate::tiles::within_limits(&trial) {
+                        self.tiles = trial;
+                        self.selected_tile = None;
+                        self.save_tiles();
+                    }
                 }
             }
             Message::ResetTiles => {
@@ -1670,7 +1742,14 @@ impl cosmic::Application for App {
         let page = self.page.unwrap_or(Page::Main);
         let content = match page {
             Page::Main => self.main_page(),
-            Page::Edit => self.edit_page(),
+            Page::Edit => widget::row::with_children(vec![
+                widget::container(self.edit_sidebar())
+                    .width(Length::Fixed(crate::board::SIDEBAR))
+                    .into(),
+                widget::container(self.edit_page()).width(Length::Fixed(WIDTH)).into(),
+            ])
+            .spacing(pages::PANEL_GAP)
+            .into(),
             Page::Wifi => pages::panel(self.wifi_page()),
             Page::Vpn => pages::panel(self.vpn_page()),
             Page::Bluetooth => pages::panel(self.bluetooth_page()),
@@ -1683,6 +1762,12 @@ impl cosmic::Application for App {
         };
         // Editing is the main page in place: it fades, the others slide.
         let depth = if matches!(page, Page::Main | Page::Edit) { 0 } else { 1 };
+        // As wide as the panel; editing, the sidebar too.
+        let content: Element<'_, Message> = if page == Page::Edit {
+            content
+        } else {
+            widget::container(content).width(Length::Fixed(WIDTH)).into()
+        };
         // The pages draw their own panels, apart, instead of the applet's
         // popup, all one: as applets' popups are sized.
         cosmic::widget::autosize::autosize(

@@ -149,6 +149,10 @@ impl Tile {
 pub enum Kind {
     Tile(Tile),
     Brightness,
+    /// A thin line across, between groups in a bubble.
+    Divider,
+    /// What follows goes in a bubble of its own.
+    Bubble,
 }
 
 impl Kind {
@@ -163,12 +167,16 @@ impl Kind {
         match self {
             Kind::Tile(tile) => tile.id(),
             Kind::Brightness => "brightness",
+            Kind::Divider => "divider",
+            Kind::Bubble => "bubble",
         }
     }
 
     fn from_id(id: &str) -> Option<Kind> {
         match id {
             "brightness" => Some(Kind::Brightness),
+            "divider" => Some(Kind::Divider),
+            "bubble" => Some(Kind::Bubble),
             _ => Tile::from_id(id).map(Kind::Tile),
         }
     }
@@ -177,6 +185,8 @@ impl Kind {
         match self {
             Kind::Tile(tile) => tile.name(),
             Kind::Brightness => crate::texts::texts().brightness,
+            Kind::Divider => crate::texts::texts().divider,
+            Kind::Bubble => crate::texts::texts().bubble,
         }
     }
 
@@ -184,6 +194,8 @@ impl Kind {
         match self {
             Kind::Tile(tile) => tile.icon(),
             Kind::Brightness => "display-brightness-symbolic",
+            Kind::Divider => "list-drag-handle-symbolic",
+            Kind::Bubble => "window-new-symbolic",
         }
     }
 
@@ -192,6 +204,7 @@ impl Kind {
         match self {
             Kind::Tile(_) => &[Fit::Icon, Fit::Short, Fit::Pill],
             Kind::Brightness => &[Fit::Vertical, Fit::Horizontal],
+            Kind::Divider | Kind::Bubble => &[Fit::Horizontal],
         }
     }
 }
@@ -284,10 +297,41 @@ impl Placed {
     pub fn new(kind: Kind) -> Placed {
         let fit = match kind {
             Kind::Tile(_) => Fit::Pill,
-            Kind::Brightness => Fit::Horizontal,
+            Kind::Brightness | Kind::Divider | Kind::Bubble => Fit::Horizontal,
         };
         Placed { kind, fit }
     }
+}
+
+impl Kind {
+    /// Splits the grid, rather than sitting on it; there can be several.
+    pub fn splits(self) -> bool {
+        matches!(self, Kind::Divider | Kind::Bubble)
+    }
+}
+
+/// At most three bubbles, so two breaks; each with two lines at most.
+pub const MAX_BUBBLES: usize = 3;
+pub const MAX_DIVIDERS: usize = 2;
+
+/// Whether these items keep to the limits: bubbles, and lines in each.
+pub fn within_limits(items: &[Placed]) -> bool {
+    let mut bubbles = 1;
+    let mut lines = 0;
+    for placed in items {
+        match placed.kind {
+            Kind::Bubble => {
+                bubbles += 1;
+                lines = 0;
+            }
+            Kind::Divider => lines += 1,
+            _ => {}
+        }
+        if bubbles > MAX_BUBBLES || lines > MAX_DIVIDERS {
+            return false;
+        }
+    }
+    true
 }
 
 /// Where each item goes, in order: the first free place it fits, from the
@@ -665,5 +709,17 @@ mod tests {
         assert_eq!(Placed::from_id("brightness:pill").map(|p| p.fit), Some(Fit::Horizontal));
         // The volume lives with what's playing now.
         assert_eq!(Placed::from_id("volume:vertical"), None);
+    }
+
+    #[test]
+    fn limits_and_bubbles() {
+        let p = |kind| Placed::new(kind);
+        let tile = p(Kind::Tile(Tile::Wifi));
+        let items = [tile, p(Kind::Divider), tile, p(Kind::Bubble), tile];
+        assert!(within_limits(&items));
+        let three_lines = [p(Kind::Divider), p(Kind::Divider), p(Kind::Divider)];
+        assert!(!within_limits(&three_lines));
+        let four_bubbles = [p(Kind::Bubble), p(Kind::Bubble), p(Kind::Bubble)];
+        assert!(!within_limits(&four_bubbles));
     }
 }
