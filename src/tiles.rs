@@ -35,10 +35,15 @@ pub enum Tile {
     Workspaces,
     Touchpad,
     HotEdge,
+    /// COSMIC Settings.
+    Settings,
+    Lock,
+    /// Power off, restart, log out.
+    Session,
 }
 
 impl Tile {
-    pub const ALL: [Tile; 18] = [
+    pub const ALL: [Tile; 21] = [
         Tile::Wifi,
         Tile::Vpn,
         Tile::Bluetooth,
@@ -57,6 +62,9 @@ impl Tile {
         Tile::Workspaces,
         Tile::Touchpad,
         Tile::HotEdge,
+        Tile::Settings,
+        Tile::Lock,
+        Tile::Session,
     ];
 
     /// How it's saved in the configuration.
@@ -80,6 +88,9 @@ impl Tile {
             Tile::Workspaces => "workspaces",
             Tile::Touchpad => "touchpad",
             Tile::HotEdge => "hot-edge",
+            Tile::Settings => "settings",
+            Tile::Lock => "lock",
+            Tile::Session => "session",
         }
     }
 
@@ -117,6 +128,9 @@ impl Tile {
             Tile::Workspaces => t.workspaces,
             Tile::Touchpad => t.touchpad,
             Tile::HotEdge => t.hot_edge,
+            Tile::Settings => t.settings,
+            Tile::Lock => t.lock,
+            Tile::Session => t.session,
         }
     }
 
@@ -140,6 +154,9 @@ impl Tile {
             Tile::Workspaces => "view-app-grid-symbolic",
             Tile::Touchpad => "input-touchpad-symbolic",
             Tile::HotEdge => "input-mouse-symbolic",
+            Tile::Settings => "emblem-system-symbolic",
+            Tile::Lock => "system-lock-screen-symbolic",
+            Tile::Session => "system-shutdown-symbolic",
         }
     }
 }

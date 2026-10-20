@@ -258,6 +258,16 @@ pub fn set_grid_ready() {
     set("grid_ready", true);
 }
 
+/// Whether the header's actions (screenshot, settings, lock, power) were
+/// made icons on the grid.
+pub fn actions_ready() -> bool {
+    get::<bool>("actions_ready").unwrap_or(false)
+}
+
+pub fn set_actions_ready() {
+    set("actions_ready", true);
+}
+
 /// The monitor whose brightness the main slider sets, by connector.
 pub fn primary_display() -> Option<String> {
     get::<String>("primary_display")

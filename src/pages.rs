@@ -1557,22 +1557,17 @@ impl App {
             );
         }
         row = row.push(widget::space::horizontal());
-        let action = |icon_name: &'static str, tooltip: &'static str, message| {
-            widget::tooltip(
-                circle_button(icon_name, message, 36.0),
-                widget::text::body(tooltip),
-                widget::tooltip::Position::Bottom,
-            )
-        };
-        // Close together, to leave the battery room for a long time left.
-        let actions = widget::row::with_capacity(5)
-            .spacing(theme::spacing().space_xxs)
-            .push(action("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)))
-            .push(action("accessories-screenshot-symbolic", t.screenshot, Message::Screenshot))
-            .push(action("emblem-system-symbolic", t.settings, Message::Settings(None)))
-            .push(action("system-lock-screen-symbolic", t.lock, Message::Lock))
-            .push(action("system-shutdown-symbolic", t.session, Message::ShowPage(Page::Session)));
-        row.push(actions).into()
+        // Only editing here: the rest are icons on the grid.
+        let edit = widget::tooltip(
+            button::icon(icon("document-edit-symbolic"))
+                .icon_size(14)
+                .padding(6)
+                .class(theme::Button::Text)
+                .on_press(Message::ShowPage(Page::Edit)),
+            widget::text::body(t.edit),
+            widget::tooltip::Position::Bottom,
+        );
+        row.push(edit).into()
     }
 
     /// A thick slider, as phones have them, with a round arrow to its page.
@@ -1862,6 +1857,17 @@ impl App {
                 None,
             ),
             // Shortcuts: never lit.
+            // Actions, not settings: never lit.
+            Tile::Settings => TileState::new(tile.icon(), t.settings, None, false, Some(Message::Settings(None)), None),
+            Tile::Lock => TileState::new(tile.icon(), t.lock, None, false, Some(Message::Lock), None),
+            Tile::Session => TileState::new(
+                tile.icon(),
+                t.session,
+                None,
+                false,
+                Some(Message::ShowPage(Page::Session)),
+                Some(Message::ShowPage(Page::Session)),
+            ),
             Tile::Screenshot => TileState::new(
                 tile.icon(),
                 t.screenshot,
