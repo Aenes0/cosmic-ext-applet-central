@@ -1407,6 +1407,7 @@ impl App {
         widget::column::with_children(vec![header, list.into()])
             .spacing(spacing.space_xs)
             .padding(spacing.space_s)
+            .height(Length::Fill)
             .into()
     }
 
@@ -1559,11 +1560,13 @@ impl App {
         row = row.push(widget::space::horizontal());
         // Only editing here: the rest are icons on the grid.
         // Small and loose, at the end: editing, power, settings.
+        // Power's and settings' drawings are thinner than the pencil's: bigger.
         let small = |name: &'static str, tooltip: &'static str, message: Message| {
+            let size = if name == "document-edit-symbolic" { 16 } else { 20 };
             widget::tooltip(
                 button::icon(icon(name))
-                    .icon_size(15)
-                    .padding(4)
+                    .icon_size(size)
+                    .padding(3)
                     .class(theme::Button::Text)
                     .on_press(message),
                 widget::text::body(tooltip),
@@ -1578,7 +1581,7 @@ impl App {
         if self.battery.is_some() {
             row.into()
         } else {
-            row.height(Length::Fixed(24.0)).into()
+            row.height(Length::Fixed(26.0)).into()
         }
     }
 

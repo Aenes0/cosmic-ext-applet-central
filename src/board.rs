@@ -122,12 +122,19 @@ impl App {
         // On top, what can grow, scrolling: the notifications, as Windows
         // 11; the calendar; what was copied. Under it, always whole: the
         // controls' bubbles, and what's playing with the volume, by the bar.
+        // As tall as the screen, as Windows' center: under the controls
+        // whole, the notifications' panel takes what's left on top, its list
+        // scrolling within.
         let top = widget::column::with_children(vec![
-            panel(self.notifications_panel()),
+            widget::container(panel(self.notifications_panel()))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
             panel(self.calendar_panel()),
             panel(self.clipboard_panel()),
         ])
-        .spacing(PANEL_GAP);
+        .spacing(PANEL_GAP)
+        .height(Length::Fill);
         let mut bottom = Vec::with_capacity(4);
         for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
             let mut rows: Vec<Element<'_, Message>> = Vec::new();
@@ -173,13 +180,12 @@ impl App {
             }
         }
         bottom.push(panel(self.media_panel()));
-        let top = widget::container(widget::scrollable(top).height(Length::Shrink))
-            .max_height(self.top_room(editing));
         widget::column::with_children(vec![
             top.into(),
             widget::column::with_children(bottom).spacing(PANEL_GAP).into(),
         ])
         .spacing(PANEL_GAP)
+        .height(Length::Fixed(self.max_height()))
         .into()
     }
 
@@ -193,7 +199,7 @@ impl App {
             let mut bubble_height = padding;
             if number == 0 && !editing {
                 let top = f32::from(theme::spacing().space_m - theme::spacing().space_xxs);
-                bubble_height += if self.battery.is_some() { 36.0 } else { 24.0 }
+                bubble_height += if self.battery.is_some() { 36.0 } else { 26.0 }
                     + f32::from(theme::spacing().space_xs)
                     - top;
                 if !self.privacy.is_empty() {
@@ -234,14 +240,18 @@ impl App {
         height + media + 32.0 + 3.0 * gap
     }
 
-    /// About how tall the top's panels are, open or folded as they are.
-    pub(crate) fn top_height(&self) -> f32 {
-        let gap = gap();
-        let notifications = match self.notifications.len() {
+    /// About how tall the notifications' panel is, by what it shows.
+    fn notifications_height(&self) -> f32 {
+        match self.notifications.len() {
             0 => 40.0,
             _ if self.layout.is_folded(Section::Notifications) => 52.0,
-            n => 56.0 + n.min(NOTIFICATIONS_SHOWN) as f32 * (NOTIFICATION_HEIGHT + gap),
-        };
+            n => 56.0 + n.min(NOTIFICATIONS_SHOWN) as f32 * (NOTIFICATION_HEIGHT + gap()),
+        }
+    }
+
+    /// About how tall the top's panels are, open or folded as they are.
+    pub(crate) fn top_height(&self) -> f32 {
+        let notifications = self.notifications_height();
         let calendar = if self.layout.is_folded(Section::Calendar) { 48.0 } else { 220.0 };
         let clipboard = if self.layout.is_folded(Section::Clipboard) {
             52.0

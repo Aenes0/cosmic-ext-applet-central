@@ -39,8 +39,9 @@ pub const WIDTH: f32 = 404.0;
 /// The popup grows with what it shows up to this, until the screen's height
 /// is known; past it the notifications scroll.
 pub const MAX_HEIGHT: f32 = 800.0;
-/// Of the screen, left out of the popup's height: the panel and some air.
-const SCREEN_MARGIN: f32 = 96.0;
+/// Of the screen, left out of the popup's height: the panel and a little air,
+/// the popup taking the rest, as Windows' center.
+const SCREEN_MARGIN: f32 = 72.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -393,7 +394,7 @@ impl App {
     /// How tall the popup can be: as the screen allows.
     pub fn max_height(&self) -> f32 {
         self.screen_height
-            .map_or(MAX_HEIGHT, |height| (height as f32 - SCREEN_MARGIN).clamp(480.0, 1200.0))
+            .map_or(MAX_HEIGHT, |height| (height as f32 - SCREEN_MARGIN).max(480.0))
     }
 
     fn close_popup(&mut self) -> app::Task<Message> {
