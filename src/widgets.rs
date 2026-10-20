@@ -138,6 +138,15 @@ fn tile_colors(theme: &cosmic::Theme, on: bool) -> (Color, Color, Color) {
     )
 }
 
+/// Which of a surface's corners are round: all, or one side's, for the two
+/// halves of a split pill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Round {
+    All,
+    Start,
+    End,
+}
+
 /// A tile's surface: lit when on, easing between off and on; a click (on
 /// what inside doesn't take it) toggles it, a right click opens more of it.
 pub struct Surface<'a, Message> {
@@ -150,6 +159,7 @@ pub struct Surface<'a, Message> {
     padding: Padding,
     /// Rounder than the theme's, or a pill: half the height.
     pill: bool,
+    round: Round,
 }
 
 impl<'a, Message> Surface<'a, Message> {
@@ -163,7 +173,15 @@ impl<'a, Message> Surface<'a, Message> {
             height: Length::Fill,
             padding: Padding::ZERO,
             pill: false,
+            round: Round::All,
         }
+    }
+
+    /// Only these corners round; the others nearly square, against the
+    /// other half.
+    pub fn round(mut self, round: Round) -> Self {
+        self.round = round;
+        self
     }
 
     pub fn on_press(mut self, message: Option<Message>) -> Self {
@@ -335,6 +353,13 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Surfac
             tile_radius(theme).min(bounds.height / 2.0)
         };
         let radius = full * (1.0 - (1.0 - PRESSED_RADIUS) * state.pressed.value());
+        // Where two halves meet: a little round, as One UI's split pills.
+        let inner = 4.0f32.min(radius);
+        let radius = match self.round {
+            Round::All => [radius; 4],
+            Round::Start => [radius, inner, inner, radius],
+            Round::End => [inner, radius, radius, inner],
+        };
         renderer.fill_quad(
             renderer::Quad {
                 bounds,
@@ -776,6 +801,144 @@ impl<'a, Message: Clone + 'a> From<Level<'a, Message>> for cosmic::Element<'a, M
     }
 }
 
+/// A handle to drag: a pill on an item's edge, as One UI's to resize a
+/// tile. Tells how far it's been dragged across since pressed, then when
+/// let go.
+pub struct Handle<'a, Message> {
+    on_drag: Box<dyn Fn(f32) -> Message + 'a>,
+    on_release: Message,
+}
+
+impl<'a, Message> Handle<'a, Message> {
+    pub fn new(on_drag: impl Fn(f32) -> Message + 'a, on_release: Message) -> Self {
+        Self {
+            on_drag: Box::new(on_drag),
+            on_release,
+        }
+    }
+}
+
+#[derive(Default)]
+struct HandleState {
+    /// Where it was pressed, while dragged.
+    from: Option<f32>,
+}
+
+/// The handle's size: thin and tall, with room around it to catch.
+const HANDLE: Size = Size::new(16.0, 36.0);
+
+impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Handle<'_, Message> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<HandleState>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(HandleState::default())
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(HANDLE.width), Length::Fixed(HANDLE.height))
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &cosmic::Renderer,
+        _limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::Node::new(HANDLE)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &cosmic::Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        let state = tree.state.downcast_mut::<HandleState>();
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(position) = cursor.position_over(layout.bounds()) {
+                    state.from = Some(position.x);
+                    shell.capture_event();
+                }
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                if let Some(from) = state.from {
+                    shell.publish((self.on_drag)(position.x - from));
+                    shell.capture_event();
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.from.take().is_some() {
+                    shell.publish(self.on_release.clone());
+                    shell.capture_event();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut cosmic::Renderer,
+        theme: &cosmic::Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        let state = tree.state.downcast_ref::<HandleState>();
+        let accent: Color = theme.cosmic().accent_color().into();
+        let active = state.from.is_some() || cursor.is_over(bounds);
+        let bar = Size::new(if active { 6.0 } else { 5.0 }, bounds.height - 8.0);
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(
+                    Point::new(bounds.center_x() - bar.width / 2.0, bounds.y + 4.0),
+                    bar,
+                ),
+                border: Border {
+                    radius: (bar.width / 2.0).into(),
+                    width: 1.5,
+                    color: theme.cosmic().background(theme.transparent).base.into(),
+                },
+                ..renderer::Quad::default()
+            },
+            accent,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+        _renderer: &cosmic::Renderer,
+    ) -> mouse::Interaction {
+        let state = tree.state.downcast_ref::<HandleState>();
+        if state.from.is_some() || cursor.is_over(layout.bounds()) {
+            mouse::Interaction::ResizingHorizontally
+        } else {
+            mouse::Interaction::None
+        }
+    }
+}
+
+impl<'a, Message: Clone + 'a> From<Handle<'a, Message>> for cosmic::Element<'a, Message> {
+    fn from(handle: Handle<'a, Message>) -> Self {
+        Self::new(handle)
+    }
+}
+
 /// Where an element sits on a grid, in cells: column, row, width, height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
@@ -791,6 +954,8 @@ pub struct Cell {
 pub struct Cells<'a, Message> {
     children: Vec<cosmic::Element<'a, Message>>,
     cells: Vec<Cell>,
+    /// Who each child is, to ease it from where it was to where it goes.
+    keys: Vec<u64>,
     columns: u16,
     row_height: f32,
     gap: f32,
@@ -801,14 +966,27 @@ impl<'a, Message> Cells<'a, Message> {
         Self {
             children: Vec::new(),
             cells: Vec::new(),
+            keys: Vec::new(),
             columns: columns.max(1),
             row_height,
             gap,
         }
     }
 
-    pub fn push(mut self, cell: Cell, child: impl Into<cosmic::Element<'a, Message>>) -> Self {
+    pub fn push(self, cell: Cell, child: impl Into<cosmic::Element<'a, Message>>) -> Self {
+        let key = u64::MAX - self.children.len() as u64;
+        self.push_keyed(key, cell, child)
+    }
+
+    /// A child known by `key`: moved elsewhere, it slides there.
+    pub fn push_keyed(
+        mut self,
+        key: u64,
+        cell: Cell,
+        child: impl Into<cosmic::Element<'a, Message>>,
+    ) -> Self {
         self.cells.push(cell);
+        self.keys.push(key);
         self.children.push(child.into());
         self
     }
@@ -818,7 +996,47 @@ impl<'a, Message> Cells<'a, Message> {
     }
 }
 
+/// A grid child sliding from where it was to its new place.
+#[derive(Clone, Copy)]
+struct Slide {
+    from: Point,
+    to: Point,
+    start: Instant,
+}
+
+/// How long a grid child takes to slide to its new place.
+const SLIDE: Duration = Duration::from_millis(240);
+
+impl Slide {
+    fn at(&self) -> Point {
+        let t = (self.start.elapsed().as_secs_f32() / SLIDE.as_secs_f32()).min(1.0);
+        // ease out cubic, as the tiles light up
+        let t = 1.0 - (1.0 - t).powi(3);
+        Point::new(
+            self.from.x + (self.to.x - self.from.x) * t,
+            self.from.y + (self.to.y - self.from.y) * t,
+        )
+    }
+
+    fn moving(&self) -> bool {
+        self.start.elapsed() < SLIDE && self.from != self.to
+    }
+}
+
+#[derive(Default)]
+struct CellsState {
+    slides: std::collections::HashMap<u64, Slide>,
+}
+
 impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<'_, Message> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<CellsState>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(CellsState::default())
+    }
+
     fn children(&self) -> Vec<Tree> {
         self.children.iter().map(Tree::new).collect()
     }
@@ -846,6 +1064,30 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<
         } else {
             f32::from(rows) * self.row_height + f32::from(rows - 1) * self.gap
         };
+        let state = tree.state.downcast_mut::<CellsState>();
+        let now = Instant::now();
+        let mut seen = std::collections::HashSet::new();
+        for (key, cell) in self.keys.iter().zip(&self.cells) {
+            let to = Point::new(
+                f32::from(cell.column) * (column_width + self.gap),
+                f32::from(cell.row) * (self.row_height + self.gap),
+            );
+            seen.insert(*key);
+            match state.slides.get_mut(key) {
+                Some(slide) if slide.to != to => {
+                    *slide = Slide {
+                        from: slide.at(),
+                        to,
+                        start: now,
+                    };
+                }
+                Some(_) => {}
+                None => {
+                    state.slides.insert(*key, Slide { from: to, to, start: now });
+                }
+            }
+        }
+        state.slides.retain(|key, _| seen.contains(key));
         let nodes = self
             .children
             .iter_mut()
@@ -905,6 +1147,11 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if let Event::Window(window::Event::RedrawRequested(_)) = event
+            && tree.state.downcast_ref::<CellsState>().slides.values().any(Slide::moving)
+        {
+            shell.request_redraw();
+        }
         for ((child, tree), c_layout) in self
             .children
             .iter_mut()
@@ -959,22 +1206,26 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Cells<
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        for ((child, tree), c_layout) in self
+        let slides = &tree.state.downcast_ref::<CellsState>().slides;
+        for (((child, state), c_layout), key) in self
             .children
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
-            .filter(|(_, layout)| layout.bounds().intersects(viewport))
+            .zip(&self.keys)
         {
-            child.as_widget().draw(
-                tree,
-                renderer,
-                theme,
-                style,
-                c_layout.with_virtual_offset(layout.virtual_offset()),
-                cursor,
-                viewport,
-            );
+            // Drawn where it's sliding through, a little off its place.
+            let offset = slides.get(key).map_or(Vector::ZERO, |slide| {
+                let at = slide.at();
+                Vector::new(at.x - slide.to.x, at.y - slide.to.y)
+            });
+            let c_layout = c_layout.with_virtual_offset(layout.virtual_offset());
+            if !(c_layout.bounds() + offset).intersects(viewport) {
+                continue;
+            }
+            renderer.with_translation(offset, |renderer| {
+                child.as_widget().draw(state, renderer, theme, style, c_layout, cursor, viewport);
+            });
         }
     }
 

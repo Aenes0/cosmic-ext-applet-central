@@ -12,7 +12,7 @@ use cosmic::{
 use crate::{
     app::Message,
     i18n::strings,
-    widgets::{Surface, inherit_colors, readable, tile_radius},
+    widgets::{Round, Surface, inherit_colors, readable, tile_radius},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -531,8 +531,9 @@ pub fn symbolic(name: &str) -> String {
     }
 }
 
-/// A quick setting, lit when on, maybe with a round arrow inside to more of
-/// it (a right click anywhere goes there too).
+/// A quick setting, lit when on: its icon, name and state, which toggle it;
+/// and, apart on the pill's other side, an arrow to more of it (a right
+/// click anywhere goes there too).
 pub fn tile<'a>(
     icon_name: &str,
     title: &'a str,
@@ -551,59 +552,54 @@ pub fn tile<'a>(
     if let Some(subtitle) = subtitle {
         text = text.push(widget::text::caption(subtitle).ellipsize(one_line()));
     }
-    let mut content = widget::row::with_capacity(3)
+    let content = widget::row::with_capacity(2)
         .push(widget::icon::icon(icon(icon_name)).size(20))
         .push(text.width(Length::Fill))
-        .spacing(10)
+        .spacing(12)
         .align_y(Alignment::Center);
-    if let Some(details) = &details {
-        content = content.push(
-            button::custom(
-                widget::container(widget::icon::icon(icon("go-next-symbolic")).size(16))
-                    .center(Length::Fixed(30.0))
-                    .class(inherit_colors()),
-            )
-            .padding(0)
-            .class(arrow_class(on))
-            .on_press(details.clone()),
-        );
-    }
-    let right = if details.is_some() { 8 } else { 14 };
-    Surface::new(
-        widget::container(content).center_y(Length::Fill).class(inherit_colors()),
-        on,
-    )
-        .padding([0, right, 0, 14])
-        .on_press(toggle)
-        .on_right_press(details)
-        .into()
+    split(content.into(), false, on, toggle, details)
 }
 
-/// The round arrow inside a tile: a shade of what's on the tile, over it.
-pub fn arrow_class(on: bool) -> theme::Button {
-    let style = move |hovered: bool, theme: &cosmic::Theme| {
-        let cosmic = theme.cosmic();
-        let component = if on {
-            &cosmic.accent_button
-        } else {
-            &cosmic.background(theme.transparent).component
-        };
-        let on = readable(component.on, component.base);
-        let mut shade = on;
-        shade.a = if hovered { 0.2 } else { 0.1 };
-        button::Style {
-            background: Some(Background::Color(shade)),
-            icon_color: Some(on),
-            border_radius: 16.0.into(),
-            ..button::Style::new()
-        }
+/// A pill in two, as One UI has them: what it is, which toggles it; a thin
+/// gap; an arrow to its page. `centered` puts the start's content in its
+/// middle, as the short pill's lone icon.
+pub fn split<'a>(
+    content: Element<'a, Message>,
+    centered: bool,
+    on: bool,
+    toggle: Option<Message>,
+    details: Option<Message>,
+) -> Element<'a, Message> {
+    let start = widget::container(content).center_y(Length::Fill).class(inherit_colors());
+    let start = if centered { start.center_x(Length::Fill) } else { start.width(Length::Fill) };
+    let Some(details) = details else {
+        return Surface::new(start, on)
+            .pill()
+            .padding([0, 18])
+            .on_press(toggle)
+            .into();
     };
-    theme::Button::Custom {
-        active: Box::new(move |_, theme| style(false, theme)),
-        disabled: Box::new(move |theme| style(false, theme)),
-        hovered: Box::new(move |_, theme| style(true, theme)),
-        pressed: Box::new(move |_, theme| style(true, theme)),
-    }
+    let start = Surface::new(start, on)
+        .pill()
+        .round(Round::Start)
+        .padding(if centered { [0, 0, 0, 6] } else { [0, 10, 0, 18] })
+        .on_press(toggle)
+        .on_right_press(Some(details.clone()));
+    let end = Surface::new(
+        widget::container(widget::icon::icon(icon("go-next-symbolic")).size(16))
+            .center(Length::Fill)
+            .class(inherit_colors()),
+        on,
+    )
+    .pill()
+    .round(Round::End)
+    .width(Length::Fixed(44.0))
+    .padding([0, 4, 0, 0])
+    .on_press(Some(details.clone()))
+    .on_right_press(Some(details));
+    widget::row::with_children(vec![start.into(), end.into()])
+        .spacing(2)
+        .into()
 }
 
 /// A small choice among a few, lit when chosen.

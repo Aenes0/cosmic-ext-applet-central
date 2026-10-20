@@ -32,7 +32,7 @@ use crate::{
     transition::Transition,
 };
 
-const WIDTH: f32 = 480.0;
+pub const WIDTH: f32 = 480.0;
 /// The popup grows with what it shows up to this, until the screen's height
 /// is known; past it the notifications scroll.
 pub const MAX_HEIGHT: f32 = 800.0;
@@ -100,6 +100,9 @@ pub enum Message {
     ToggleFold(Section),
     /// An item of the grid, by index, and its new size.
     SetFit(usize, Fit),
+    /// An item's resize handle dragged this far across since pressed; let go.
+    ResizeDrag(usize, f32),
+    ResizeEnd,
     AddItem(Kind),
     /// The monitor the main brightness slider sets, by connector.
     SetPrimaryDisplay(String),
@@ -271,6 +274,8 @@ pub struct App {
     pub(crate) panel_icons: PanelIcons,
     pub(crate) layout: Layout,
     pub(crate) primary_display: Option<String>,
+    /// The item being resized by its handle, and its size when grabbed.
+    resizing: Option<(usize, Fit)>,
     /// The height of the screen the panel is on, in logical pixels.
     screen_height: Option<i32>,
     /// The panel button's size, all its icons.
@@ -559,8 +564,14 @@ impl cosmic::Application for App {
 
     fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
         let tiles = load_tiles();
+        // COSMIC_QS_PREVIEW_SELECT=4 picks that item while editing, to see
+        // its sizes and handle.
+        let selected_tile = std::env::var("COSMIC_QS_PREVIEW_SELECT")
+            .ok()
+            .and_then(|i| i.parse().ok());
         let app = Self {
             core,
+            selected_tile,
             tiles,
             do_not_disturb: DO_NOT_DISTURB.get(),
             dark_mode: DARK_MODE.get(),
@@ -593,11 +604,7 @@ impl cosmic::Application for App {
             }),
             None => Task::none(),
         };
-        // The monitors early: the main slider sets the main one's brightness.
-        let displays = Task::future(async {
-            cosmic::action::app(Message::Displays(services::displays().await))
-        });
-        (app, Task::batch([task, displays]))
+        (app, task)
     }
 
     fn core(&self) -> &app::Core {
@@ -624,7 +631,12 @@ impl cosmic::Application for App {
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 self.page = Some(Page::Main);
-                return cosmic::surface::surface_task(cosmic::surface::action::app_popup(
+                // The monitors, for the main brightness slider: read when the
+                // popup opens, not by each screen's applet all the time.
+                let displays = Task::future(async {
+                    cosmic::action::app(Message::Displays(services::displays().await))
+                });
+                return Task::batch([displays, cosmic::surface::surface_task(cosmic::surface::action::app_popup(
                     |_: &Self| Default::default(),
                     move |app: &mut Self| {
                         let mut settings =
@@ -638,7 +650,7 @@ impl cosmic::Application for App {
                         settings
                     },
                     None,
-                ));
+                ))]);
             }
             Message::Preview(page) => {
                 let open = self.update(Message::TogglePopup);
@@ -658,6 +670,38 @@ impl cosmic::Application for App {
                     && placed.kind.fits().contains(&fit)
                 {
                     placed.fit = fit;
+                    self.save_tiles();
+                }
+            }
+            Message::ResizeDrag(index, dx) => {
+                let Some(placed) = self.tiles.get(index).copied() else {
+                    return Task::none();
+                };
+                let start = match self.resizing {
+                    Some((i, fit)) if i == index => fit,
+                    _ => {
+                        self.resizing = Some((index, placed.fit));
+                        placed.fit
+                    }
+                };
+                // The size whose width is nearest where the handle is.
+                let target = f32::from(start.span().0) + dx / crate::board::column_step();
+                let fit = placed
+                    .kind
+                    .fits()
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| {
+                        let far = |fit: &Fit| (f32::from(fit.span().0) - target).abs();
+                        far(a).total_cmp(&far(b))
+                    })
+                    .unwrap_or(placed.fit);
+                if fit != placed.fit {
+                    self.tiles[index].fit = fit;
+                }
+            }
+            Message::ResizeEnd => {
+                if self.resizing.take().is_some() {
                     self.save_tiles();
                 }
             }
@@ -926,6 +970,19 @@ impl cosmic::Application for App {
             }
             Message::Inhibited(cookie) => self.inhibit = cookie,
             Message::SettingsChanged => {
+                // What another screen's applet saved; not while this one is
+                // in the middle of moving or resizing an item.
+                if self.drag.is_none() && self.resizing.is_none() {
+                    let tiles = load_tiles();
+                    if tiles != self.tiles {
+                        self.tiles = tiles;
+                        self.selected_tile = None;
+                    }
+                }
+                self.panel_icons = PanelIcons::load();
+                self.layout = Layout::load();
+                self.bar_spacing = BarSpacing::load();
+                self.primary_display = layout::primary_display();
                 self.do_not_disturb = DO_NOT_DISTURB.get();
                 // Turned off elsewhere: no timer left.
                 if !self.do_not_disturb && self.dnd_until.is_some() {

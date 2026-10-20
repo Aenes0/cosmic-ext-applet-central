@@ -20,10 +20,10 @@ use crate::{
     pages::{PANEL_GAP, dimmed, panel},
     texts::texts,
     tiles::{
-        COLUMNS, Fit, Kind, Placed, TileState, arrow_class, badge, chip_class, edit_class,
-        edit_container, icon, pack,
+        COLUMNS, Fit, Kind, Placed, TileState, badge, chip_class, edit_class, edit_container,
+        icon, pack, split,
     },
-    widgets::{Cells, Level, Surface, inherit_colors},
+    widgets::{Cells, Handle, Level, Surface, inherit_colors},
 };
 
 /// A row of the grid.
@@ -31,6 +31,23 @@ const ROW: f32 = 60.0;
 
 fn gap() -> f32 {
     f32::from(theme::spacing().space_xs)
+}
+
+/// A column and the gap after it, in pixels: how far a resize handle goes
+/// for one column more.
+pub fn column_step() -> f32 {
+    let inner = crate::app::WIDTH - 2.0 * f32::from(theme::spacing().space_m) - 2.0;
+    let columns = f32::from(COLUMNS);
+    (inner - gap() * (columns - 1.0)) / columns + gap()
+}
+
+/// Who an item is on the grid, whatever its size or place, for it to slide
+/// when moved.
+fn key(kind: Kind) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    kind.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// What a grid item shows on the bar, if anything.
@@ -83,7 +100,7 @@ impl App {
 
     /// The grid; while editing every item shows, plain, to move or take off.
     fn grid(&self, editing: bool) -> Element<'_, Message> {
-        let mut shown: Vec<((u16, u16), Element<'_, Message>)> = Vec::new();
+        let mut shown: Vec<((u16, u16), u64, Element<'_, Message>)> = Vec::new();
         for (index, placed) in self.tiles.iter().copied().enumerate() {
             let element = if editing {
                 Some(self.edit_item(index, placed))
@@ -91,13 +108,13 @@ impl App {
                 self.item(placed)
             };
             if let Some(element) = element {
-                shown.push((placed.fit.span(), element));
+                shown.push((placed.fit.span(), key(placed.kind), element));
             }
         }
-        let sizes: Vec<(u16, u16)> = shown.iter().map(|(size, _)| *size).collect();
+        let sizes: Vec<(u16, u16)> = shown.iter().map(|(size, ..)| *size).collect();
         let mut cells = Cells::new(COLUMNS, ROW, gap());
-        for (cell, (_, element)) in pack(&sizes).into_iter().zip(shown) {
-            cells = cells.push(cell, element);
+        for (cell, (_, key, element)) in pack(&sizes).into_iter().zip(shown) {
+            cells = cells.push_keyed(key, cell, element);
         }
         cells.into()
     }
@@ -184,6 +201,7 @@ impl App {
         };
         let body = widget::mouse_area(content.class(edit_container(selected)))
             .on_press(Message::DragStart(index))
+            .on_release(Message::DragEnd)
             .on_enter(Message::DragOver(index))
             .interaction(if self.drag.is_some() {
                 iced::mouse::Interaction::Grabbing
@@ -195,7 +213,23 @@ impl App {
             .height(Length::Fill)
             .align_x(iced::alignment::Horizontal::Right)
             .align_y(iced::alignment::Vertical::Top);
-        iced::widget::stack(vec![body.into(), corner.into()]).into()
+        let mut layers: Vec<Element<'_, Message>> = vec![body.into(), corner.into()];
+        // Picked, and with sizes to choose: a handle on its right edge to
+        // drag it wider or narrower.
+        if self.selected_tile == Some(index) && placed.kind.fits().len() > 1 {
+            layers.push(
+                widget::container(Handle::new(
+                    move |dx| Message::ResizeDrag(index, dx),
+                    Message::ResizeEnd,
+                ))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .align_y(iced::alignment::Vertical::Center)
+                .into(),
+            );
+        }
+        iced::widget::stack(layers).into()
     }
 
     /// Editing's title row: back to the controls, start over, done.
@@ -421,37 +455,21 @@ fn icon_tile<'a>(state: TileState) -> Element<'a, Message> {
     .into()
 }
 
-/// A tile as a short pill: its icon, which toggles it, and an arrow to its
-/// page.
+/// A tile as a short pill: its icon, which toggles it, and apart an arrow
+/// to its page.
 fn short_tile<'a>(state: TileState) -> Element<'a, Message> {
     let name = match &state.subtitle {
         Some(subtitle) => format!("{} · {subtitle}", state.title),
         None => state.title.to_owned(),
     };
-    let mut content = widget::row::with_capacity(3)
-        .push(widget::icon::icon(icon(state.icon)).size(20))
-        .align_y(Alignment::Center);
-    let has_details = state.details.is_some();
-    if let Some(details) = &state.details {
-        content = content.push(widget::space::horizontal()).push(
-            button::custom(
-                widget::container(widget::icon::icon(icon("go-next-symbolic")).size(16))
-                    .center(Length::Fixed(30.0))
-                    .class(inherit_colors()),
-            )
-            .padding(0)
-            .class(arrow_class(state.on))
-            .on_press(details.clone()),
-        );
-    }
-    let content = widget::container(content).center_y(Length::Fill).class(inherit_colors());
-    let content = if has_details { content.width(Length::Fill) } else { content.center_x(Length::Fill) };
-    let surface = Surface::new(content, state.on)
-        .pill()
-        .padding([0, if has_details { 10 } else { 0 }, 0, if has_details { 18 } else { 0 }])
-        .on_press(state.toggle)
-        .on_right_press(state.details);
-    widget::tooltip(surface, widget::text::body(name), widget::tooltip::Position::Bottom).into()
+    let pill = split(
+        widget::icon::icon(icon(state.icon)).size(20).into(),
+        true,
+        state.on,
+        state.toggle,
+        state.details,
+    );
+    widget::tooltip(pill, widget::text::body(name), widget::tooltip::Position::Bottom).into()
 }
 
 /// A slider standing up; a right click opens its page.

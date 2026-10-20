@@ -1369,6 +1369,9 @@ pub fn settings_subscription() -> Subscription<()> {
                 (DO_NOT_DISTURB.config, DO_NOT_DISTURB.version),
                 (DARK_MODE.config, DARK_MODE.version),
                 (HOT_EDGE, 1),
+                // Its own: what one panel's applet saves, the others on the
+                // other screens show at once.
+                (crate::APP_ID, 1),
                 (
                     "com.system76.CosmicComp",
                     COMP_CONFIG_VERSION,
