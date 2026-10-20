@@ -1,4 +1,12 @@
-# Configurações rápidas para o painel do COSMIC
+# Central — applet tudo-em-um para o painel do COSMIC
+
+> Fork de [Configurações rápidas](https://github.com/DrakRosmann/cosmic-ext-applet-quick-settings),
+> de DrakRosmann (GPL-3.0). O objetivo é uma central no estilo do Windows 11 e do Android:
+> configurações rápidas, calendário, histórico de notificações, área de transferência,
+> dados do sistema e um botão para mostrar a área de trabalho, instalada de forma nativa
+> (sem Flatpak). O texto abaixo descreve o applet original e vai sendo atualizado.
+
+## Configurações rápidas para o painel do COSMIC
 
 Applet no estilo das configurações rápidas do Android 17, do GNOME e do Windows e da
 Central de Controle do macOS e do iOS.

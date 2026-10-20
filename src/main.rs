@@ -15,14 +15,14 @@ mod transition;
 mod widgets;
 mod workspaces;
 
-pub const APP_ID: &str = "io.github.DrakRosmann.CosmicExtAppletQuickSettings";
+pub const APP_ID: &str = "io.github.Aenes0.CosmicCentral";
 
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,cosmic_ext_applet_quick_settings=info".into()),
+                .unwrap_or_else(|_| "warn,cosmic_ext_applet_central=info".into()),
         )
         .init();
     cosmic::applet::run::<app::App>(())

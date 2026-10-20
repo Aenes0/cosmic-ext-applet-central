@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Central
+Name[pt_BR]=Central
+Comment=Quick settings, calendar, notifications, clipboard and system monitor in one panel applet
+Comment[pt_BR]=Configurações rápidas, calendário, notificações, área de transferência e dados do sistema num applet só
+Type=Application
+Exec=@bindir@/cosmic-ext-applet-central
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Settings;Control;Quick;Central;
+Icon=io.github.Aenes0.CosmicCentral
+NoDisplay=true
+X-CosmicApplet=true
+X-NotificationsApplet=true
+X-HostWaylandDisplay=true

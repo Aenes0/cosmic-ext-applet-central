@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.DrakRosmann.CosmicExtAppletQuickSettings</id>
+  <id>io.github.Aenes0.CosmicCentral</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <developer id="io.github.drakrosmann">
-    <name>DrakRosmann</name>
+  <developer id="io.github.aenes0">
+    <name>Aenes0 (fork of Quick Settings by DrakRosmann)</name>
   </developer>
-  <name>Quick Settings</name>
-  <name xml:lang="pt-BR">Configurações rápidas</name>
-  <name xml:lang="fr">Réglages rapides</name>
+  <name>Central</name>
+  <name xml:lang="pt-BR">Central</name>
   <summary>Wi-Fi, Bluetooth, sound, brightness, media and notifications in one panel applet</summary>
   <summary xml:lang="pt-BR">Wi-Fi, Bluetooth, som, brilho, mídia e notificações num applet do painel</summary>
   <summary xml:lang="fr">Wi-Fi, Bluetooth, son, luminosité, médias et notifications dans une applet du panneau</summary>
@@ -23,15 +22,15 @@
       <li>The battery of the computer and of each wireless mouse, keyboard or headset on the panel</li>
     </ul>
   </description>
-  <url type="homepage">https://github.com/DrakRosmann/cosmic-ext-applet-quick-settings</url>
-  <url type="bugtracker">https://github.com/DrakRosmann/cosmic-ext-applet-quick-settings/issues</url>
-  <url type="vcs-browser">https://github.com/DrakRosmann/cosmic-ext-applet-quick-settings</url>
-  <icon type="stock">io.github.DrakRosmann.CosmicExtAppletQuickSettings</icon>
-  <launchable type="desktop-id">io.github.DrakRosmann.CosmicExtAppletQuickSettings.desktop</launchable>
+  <url type="homepage">https://github.com/Aenes0/cosmic-ext-applet-central</url>
+  <url type="bugtracker">https://github.com/Aenes0/cosmic-ext-applet-central/issues</url>
+  <url type="vcs-browser">https://github.com/Aenes0/cosmic-ext-applet-central</url>
+  <icon type="stock">io.github.Aenes0.CosmicCentral</icon>
+  <launchable type="desktop-id">io.github.Aenes0.CosmicCentral.desktop</launchable>
   <content_rating type="oars-1.1"/>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/DrakRosmann/cosmic-ext-applet-quick-settings/main/assets/screenshot.png</image>
+      <image>https://raw.githubusercontent.com/Aenes0/cosmic-ext-applet-central/main/assets/screenshot.png</image>
     </screenshot>
   </screenshots>
   <releases>
@@ -39,7 +38,7 @@
   </releases>
   <provides>
     <id>com.system76.CosmicApplet</id>
-    <binary>cosmic-ext-applet-quick-settings</binary>
+    <binary>cosmic-ext-applet-central</binary>
   </provides>
   <categories>
     <category>Settings</category>
