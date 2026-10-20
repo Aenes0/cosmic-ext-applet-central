@@ -1573,10 +1573,11 @@ impl App {
     /// A thick slider, as phones have them, with a round arrow to its page.
     fn slider_row(level: Level<'static, Message>, more: Message) -> Element<'static, Message> {
         widget::row::with_children(vec![
-            level.into(),
-            circle_button("go-next-symbolic", more, 44.0).into(),
+            level.joined().into(),
+            crate::tiles::slider_end("go-next-symbolic", more, false),
         ])
-        .spacing(theme::spacing().space_xs)
+        .spacing(2)
+        .height(Length::Fixed(44.0))
         .align_y(Alignment::Center)
         .into()
     }

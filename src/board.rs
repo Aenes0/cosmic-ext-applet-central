@@ -145,8 +145,21 @@ impl App {
                         change,
                     )
                     .vertical()
+                    .joined()
                     .on_release(release);
-                    Some(standing(level, Page::Displays))
+                    // The arrow to every monitor's on top, a piece of its own.
+                    Some(
+                        widget::column::with_children(vec![
+                            crate::tiles::slider_end(
+                                "go-next-symbolic",
+                                Message::ShowPage(Page::Displays),
+                                true,
+                            ),
+                            standing(level, Page::Displays),
+                        ])
+                        .spacing(2)
+                        .into(),
+                    )
                 } else {
                     self.brightness_slider()
                 }

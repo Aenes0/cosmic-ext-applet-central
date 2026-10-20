@@ -584,6 +584,25 @@ pub fn split<'a>(
         .into()
 }
 
+/// A slider's other piece, as a split pill's: an arrow to its page, at the
+/// end across or on top standing.
+pub fn slider_end<'a>(icon_name: &str, message: Message, standing: bool) -> Element<'a, Message> {
+    let surface = Surface::new(
+        widget::container(widget::icon::icon(icon(icon_name)).size(16))
+            .center(Length::Fill)
+            .class(inherit_colors()),
+        false,
+    )
+    .pill()
+    .on_press(Some(message.clone()))
+    .on_right_press(Some(message));
+    if standing {
+        surface.round(Round::Top).height(Length::Fixed(36.0)).into()
+    } else {
+        surface.round(Round::End).width(Length::Fixed(44.0)).into()
+    }
+}
+
 /// A small choice among a few, lit when chosen.
 pub fn chip_class(on: bool) -> theme::Button {
     tile_class(on)

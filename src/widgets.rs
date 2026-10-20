@@ -145,6 +145,8 @@ pub enum Round {
     All,
     Start,
     End,
+    /// The top's corners, for a piece above a standing slider.
+    Top,
 }
 
 /// A tile's surface: lit when on, easing between off and on; a click (on
@@ -359,6 +361,7 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Surfac
             Round::All => [radius; 4],
             Round::Start => [radius, inner, inner, radius],
             Round::End => [inner, radius, radius, inner],
+            Round::Top => [radius, radius, inner, inner],
         };
         renderer.fill_quad(
             renderer::Quad {
@@ -464,6 +467,9 @@ pub struct Level<'a, Message> {
     vertical: bool,
     /// Low: the icon, then a thin rail with a round knob.
     compact: bool,
+    /// Its far end against another piece, as a split pill's halves: those
+    /// corners only a little round.
+    joined: bool,
 }
 
 impl<'a, Message> Level<'a, Message> {
@@ -482,6 +488,24 @@ impl<'a, Message> Level<'a, Message> {
             height: 44.0,
             vertical: false,
             compact: false,
+            joined: false,
+        }
+    }
+
+    /// Its far end meets another piece: the end's corners little round.
+    pub fn joined(mut self) -> Self {
+        self.joined = true;
+        self
+    }
+
+    /// Its corners: round, but little where it's joined (the end across,
+    /// the top standing).
+    fn corners(&self, radius: f32) -> [f32; 4] {
+        let inner = 4.0f32.min(radius);
+        match (self.joined, self.vertical) {
+            (false, _) => [radius; 4],
+            (true, false) => [radius, inner, inner, radius],
+            (true, true) => [inner, inner, radius, radius],
         }
     }
 
@@ -714,7 +738,7 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
             renderer::Quad {
                 bounds,
                 border: Border {
-                    radius: radius.into(),
+                    radius: self.corners(radius).into(),
                     ..Border::default()
                 },
                 ..renderer::Quad::default()
@@ -737,11 +761,13 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         } else {
             Rectangle::new(bounds.position(), Size::new(lit_length, side))
         };
+        // Full, it reaches the joined end and takes its corners.
+        let full = self.value >= 0.999;
         renderer.fill_quad(
             renderer::Quad {
                 bounds: lit_bounds,
                 border: Border {
-                    radius: radius.into(),
+                    radius: if full { self.corners(radius) } else { [radius; 4] }.into(),
                     ..Border::default()
                 },
                 ..renderer::Quad::default()
