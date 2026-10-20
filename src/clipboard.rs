@@ -604,10 +604,15 @@ impl App {
             } else {
                 let cards: Vec<Element<'_, Message>> =
                     self.clipboard.iter().map(|entry| self.clipboard_card(entry)).collect();
+                // A few show, the others scroll in their own panel.
+                let shown = crate::board::CLIPBOARD_SHOWN as f32;
                 column = column.push(
-                    widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xxs))
-                        .height(Length::Shrink)
-                        .width(Length::Fill),
+                    widget::container(
+                        widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xxs))
+                            .height(Length::Shrink)
+                            .width(Length::Fill),
+                    )
+                    .max_height(shown * crate::board::CLIPBOARD_HEIGHT + (shown - 1.0) * f32::from(spacing.space_xxs)),
                 );
             }
         }

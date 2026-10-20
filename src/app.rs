@@ -731,7 +731,22 @@ impl cosmic::Application for App {
                 return self.update(Message::Preview(page));
             }
             Message::SetBarIcon(item, show) => self.panel_icons.set(item, show),
-            Message::ToggleFold(section) => self.layout.toggle_fold(section),
+            Message::ToggleFold(section) => {
+                self.layout.toggle_fold(section);
+                // Opened with no room for it: the other panels on top fold.
+                let top = [Section::Notifications, Section::Calendar, Section::Clipboard];
+                if top.contains(&section) && !self.layout.is_folded(section) {
+                    let editing = self.page == Some(Page::Edit);
+                    for other in top.into_iter().filter(|s| *s != section) {
+                        if self.top_height() <= self.top_room(editing) {
+                            break;
+                        }
+                        if !self.layout.is_folded(other) {
+                            self.layout.toggle_fold(other);
+                        }
+                    }
+                }
+            }
             Message::ResizeDrag(index, dx) => {
                 self.hovered = Some(index);
                 let Some(placed) = self.tiles.get(index).copied() else {

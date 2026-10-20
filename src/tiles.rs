@@ -568,7 +568,7 @@ pub fn tile<'a>(
         text = text.push(widget::text::caption(subtitle).ellipsize(one_line()));
     }
     let content = widget::row::with_capacity(2)
-        .push(widget::icon::icon(icon(icon_name)).size(20))
+        .push(widget::icon::icon(icon(icon_name)).size(16))
         .push(text.width(Length::Fill))
         .spacing(12)
         .align_y(Alignment::Center);
@@ -608,7 +608,7 @@ pub fn split<'a>(
     )
     .pill()
     .round(Round::End)
-    .width(Length::Fixed(44.0))
+    .width(Length::Fixed(36.0))
     .padding([0, 4, 0, 0])
     .on_press(Some(details.clone()))
     .on_right_press(Some(details));
@@ -630,12 +630,12 @@ pub fn slider_end<'a>(icon_name: &str, message: Message, standing: bool) -> Elem
     .on_press(Some(message.clone()))
     .on_right_press(Some(message));
     if standing {
-        surface.round(Round::Top).height(Length::Fixed(36.0)).into()
+        surface.round(Round::Top).height(Length::Fixed(28.0)).into()
     } else {
         surface
             .round(Round::End)
-            .width(Length::Fixed(44.0))
-            .height(Length::Fixed(44.0))
+            .width(Length::Fixed(36.0))
+            .height(Length::Fixed(36.0))
             .into()
     }
 }

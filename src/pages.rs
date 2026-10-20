@@ -1397,8 +1397,13 @@ impl App {
                 cards.push(self.notification_card(group[0], more));
             }
         }
-        let list = widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
-            .height(Length::Shrink);
+        // Two show, the others scroll in their own panel.
+        let shown = crate::board::NOTIFICATIONS_SHOWN as f32;
+        let list = widget::container(
+            widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
+                .height(Length::Shrink),
+        )
+        .max_height(shown * crate::board::NOTIFICATION_HEIGHT + (shown - 1.0) * f32::from(spacing.space_xs));
         widget::column::with_children(vec![header, list.into()])
             .spacing(spacing.space_xs)
             .padding(spacing.space_s)
@@ -1572,6 +1577,7 @@ impl App {
 
     /// A thick slider, as phones have them, with a round arrow to its page.
     fn slider_row(level: Level<'static, Message>, more: Message) -> Element<'static, Message> {
+        let level = level.height(36.0);
         // As tall as the slider, in the middle of the grid's taller row.
         widget::container(
             widget::row::with_children(vec![
@@ -1579,7 +1585,7 @@ impl App {
                 crate::tiles::slider_end("go-next-symbolic", more, false),
             ])
             .spacing(2)
-            .height(Length::Fixed(44.0))
+            .height(Length::Fixed(36.0))
             .align_y(Alignment::Center),
         )
         .center_y(Length::Fill)

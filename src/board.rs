@@ -17,7 +17,7 @@ use cosmic::{
 use crate::{
     app::{App, Message, Page},
     i18n::strings,
-    layout::{BarItem, Show},
+    layout::{BarItem, Section, Show},
     pages::{PANEL_GAP, dimmed, panel},
     texts::texts,
     tiles::{
@@ -28,7 +28,15 @@ use crate::{
 };
 
 /// A row of the grid.
-const ROW: f32 = 60.0;
+/// A row of the grid: tiles a fifth smaller than phones', for a desktop.
+const ROW: f32 = 48.0;
+
+/// How many notifications and copied things show before their own panel
+/// scrolls, and about how tall each is.
+pub const NOTIFICATIONS_SHOWN: usize = 2;
+pub const NOTIFICATION_HEIGHT: f32 = 84.0;
+pub const CLIPBOARD_SHOWN: usize = 3;
+pub const CLIPBOARD_HEIGHT: f32 = 48.0;
 
 fn gap() -> f32 {
     f32::from(theme::spacing().space_xs)
@@ -111,12 +119,16 @@ impl App {
 
     fn board(&self, editing: bool) -> Element<'_, Message> {
         let spacing = theme::spacing();
-        let mut panels = Vec::with_capacity(6);
-        // The notifications on top, as Windows 11; the controls' bubbles;
-        // what's playing at the bottom, by the bar, with the volume.
-        panels.push(panel(self.notifications_panel()));
-        panels.push(panel(self.calendar_panel()));
-        panels.push(panel(self.clipboard_panel()));
+        // On top, what can grow, scrolling: the notifications, as Windows
+        // 11; the calendar; what was copied. Under it, always whole: the
+        // controls' bubbles, and what's playing with the volume, by the bar.
+        let top = widget::column::with_children(vec![
+            panel(self.notifications_panel()),
+            panel(self.calendar_panel()),
+            panel(self.clipboard_panel()),
+        ])
+        .spacing(PANEL_GAP);
+        let mut bottom = Vec::with_capacity(4);
         for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
             let mut rows: Vec<Element<'_, Message>> = Vec::new();
             if number == 0 && !editing {
@@ -144,7 +156,7 @@ impl App {
             if rows.is_empty() {
                 continue;
             }
-            panels.push(panel(
+            bottom.push(panel(
                 widget::column::with_children(rows)
                     .spacing(spacing.space_s)
                     .padding(spacing.space_m),
@@ -154,16 +166,88 @@ impl App {
         if editing {
             let bubbles = self.tiles.iter().filter(|p| p.kind == Kind::Bubble).count() + 1;
             if bubbles < crate::tiles::MAX_BUBBLES {
-                panels.push(self.new_bubble(bubbles));
+                bottom.push(self.new_bubble(bubbles));
             }
         }
-        panels.push(panel(self.media_panel()));
-        let column = widget::column::with_children(panels).spacing(PANEL_GAP);
-        if editing {
-            widget::scrollable(column).height(Length::Shrink).into()
-        } else {
-            column.into()
+        bottom.push(panel(self.media_panel()));
+        let top = widget::container(widget::scrollable(top).height(Length::Shrink))
+            .max_height(self.top_room(editing));
+        widget::column::with_children(vec![
+            top.into(),
+            widget::column::with_children(bottom).spacing(PANEL_GAP).into(),
+        ])
+        .spacing(PANEL_GAP)
+        .into()
+    }
+
+    /// About how tall the bottom is, always shown whole: the bubbles, by
+    /// their rows, and what's playing with the volume.
+    fn bottom_height(&self, editing: bool) -> f32 {
+        let gap = gap();
+        let padding = 2.0 * f32::from(theme::spacing().space_m);
+        let mut height = 0.0;
+        for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
+            let mut bubble_height = padding;
+            if number == 0 && !editing {
+                bubble_height += 36.0 + gap;
+                if !self.privacy.is_empty() {
+                    bubble_height += 48.0 + gap;
+                }
+            }
+            if editing {
+                bubble_height += 24.0 + gap;
+            }
+            for part in &bubble.parts {
+                match part {
+                    Part::Group(items) => {
+                        let mut sizes: Vec<(u16, u16)> =
+                            items.iter().map(|(_, p)| p.fit.span()).collect();
+                        if editing {
+                            sizes.push((1, 1));
+                        }
+                        let rows = pack(&sizes).iter().map(|c| c.row + c.height).max().unwrap_or(0);
+                        if rows > 0 {
+                            bubble_height += f32::from(rows) * (ROW + gap) - gap + gap;
+                        }
+                    }
+                    Part::Line(_) => bubble_height += if editing { 24.0 } else { 1.0 } + gap,
+                }
+            }
+            height += bubble_height + PANEL_GAP;
         }
+        if editing {
+            height += 44.0 + PANEL_GAP;
+        }
+        // What's playing: whole, a line of it, or that nothing plays; the
+        // volume under it.
+        let media = match self.shown_media() {
+            Some(_) if !self.layout.is_folded(Section::Media) => 130.0,
+            Some(_) => 56.0,
+            None => 30.0,
+        };
+        height + media + 32.0 + 3.0 * gap
+    }
+
+    /// About how tall the top's panels are, open or folded as they are.
+    pub(crate) fn top_height(&self) -> f32 {
+        let gap = gap();
+        let notifications = match self.notifications.len() {
+            0 => 40.0,
+            _ if self.layout.is_folded(Section::Notifications) => 52.0,
+            n => 56.0 + n.min(NOTIFICATIONS_SHOWN) as f32 * (NOTIFICATION_HEIGHT + gap),
+        };
+        let calendar = if self.layout.is_folded(Section::Calendar) { 48.0 } else { 220.0 };
+        let clipboard = if self.layout.is_folded(Section::Clipboard) {
+            52.0
+        } else {
+            56.0 + self.clipboard.len().clamp(1, CLIPBOARD_SHOWN) as f32 * (CLIPBOARD_HEIGHT + 4.0)
+        };
+        notifications + calendar + clipboard + 2.0 * PANEL_GAP
+    }
+
+    /// What the top can have of the screen, the bottom whole.
+    pub(crate) fn top_room(&self, editing: bool) -> f32 {
+        (self.max_height() - self.bottom_height(editing) - PANEL_GAP).max(96.0)
     }
 
     /// A group of items on a grid; while editing every one shows, plain, to
@@ -309,7 +393,7 @@ impl App {
                 if placed.fit == Fit::Vertical {
                     let (value, change, release) = self.brightness_level()?;
                     let level = Level::new(
-                        widget::icon::icon(icon("display-brightness-symbolic")).size(20),
+                        widget::icon::icon(icon("display-brightness-symbolic")).size(16),
                         value,
                         change,
                     )
@@ -348,7 +432,7 @@ impl App {
             kind => kind.icon(),
         };
         let mut content = widget::row::with_capacity(3)
-            .push(widget::icon::icon(icon(icon_name)).size(20))
+            .push(widget::icon::icon(icon(icon_name)).size(16))
             .spacing(10)
             .align_y(Alignment::Center);
         if matches!(placed.fit, Fit::Pill | Fit::Horizontal) {
@@ -730,7 +814,7 @@ fn icon_tile<'a>(state: TileState) -> Element<'a, Message> {
         None => state.title.to_owned(),
     };
     let surface = Surface::new(
-        widget::container(widget::icon::icon(icon(state.icon)).size(20))
+        widget::container(widget::icon::icon(icon(state.icon)).size(16))
             .center(Length::Fill)
             .class(inherit_colors()),
         state.on,
@@ -756,7 +840,7 @@ fn short_tile<'a>(state: TileState) -> Element<'a, Message> {
         None => state.title.to_owned(),
     };
     let pill = split(
-        widget::icon::icon(icon(state.icon)).size(20).into(),
+        widget::icon::icon(icon(state.icon)).size(16).into(),
         true,
         state.on,
         state.toggle,

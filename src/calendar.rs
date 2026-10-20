@@ -113,14 +113,15 @@ impl App {
         let today = Local::now().date_naive();
         let arrow = |name: &str, message: Message| -> Element<'_, Message> {
             button::icon(icon(name))
-                .padding(6)
+                .icon_size(14)
+                .padding(4)
                 .class(theme::Button::Text)
                 .on_press(message)
                 .into()
         };
         let mut title = widget::row::with_capacity(4)
             .push(
-                widget::text::body(format!("{} {}", t.months[month.month as usize - 1], month.year))
+                widget::text::caption(format!("{} {}", t.months[month.month as usize - 1], month.year))
                     .font(cosmic::font::semibold())
                     .width(Length::Fill),
             )
@@ -141,10 +142,10 @@ impl App {
         let cell = |content: Element<'static, Message>| -> Element<'static, Message> {
             widget::container(content)
                 .center_x(Length::Fill)
-                .center_y(Length::Fixed(32.0))
+                .center_y(Length::Fixed(24.0))
                 .into()
         };
-        let mut weeks = widget::column::with_capacity(7).spacing(2);
+        let mut weeks = widget::column::with_capacity(7).spacing(0);
         weeks = weeks.push(widget::row::with_children(
             t.weekdays_short
                 .iter()
@@ -161,18 +162,18 @@ impl App {
             let element = if (1..=days as i64).contains(&day) {
                 let date = NaiveDate::from_ymd_opt(month.year, month.month, day as u32);
                 let is_today = date == Some(today);
-                let number = widget::text::body(day.to_string());
+                let number = widget::text::caption(day.to_string());
                 if is_today {
                     cell(
                         widget::container(number)
-                            .center(Length::Fixed(30.0))
+                            .center(Length::Fixed(22.0))
                             .class(theme::Container::custom(|theme| {
                                 let accent = &theme.cosmic().accent_button;
                                 widget::container::Style {
                                     background: Some(cosmic::iced::Background::Color(accent.base.into())),
                                     text_color: Some(crate::widgets::readable(accent.on, accent.base)),
                                     border: cosmic::iced::Border {
-                                        radius: 15.0.into(),
+                                        radius: 11.0.into(),
                                         ..Default::default()
                                     },
                                     ..Default::default()
@@ -192,7 +193,7 @@ impl App {
             }
         }
         widget::column::with_children(vec![title.into(), weeks.into()])
-            .spacing(spacing.space_xs)
+            .spacing(spacing.space_xxs)
             .into()
     }
 }

@@ -492,6 +492,12 @@ impl<'a, Message> Level<'a, Message> {
         }
     }
 
+    /// How thick it is, lying.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height;
+        self
+    }
+
     /// Its far end meets another piece: the end's corners little round.
     pub fn joined(mut self) -> Self {
         self.joined = true;
