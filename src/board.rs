@@ -56,7 +56,7 @@ pub fn bar_item(kind: Kind) -> Option<BarItem> {
         Kind::Tile(crate::tiles::Tile::Wifi) => Some(BarItem::Network),
         Kind::Tile(tile) => Some(BarItem::Tile(tile)),
         Kind::Volume => Some(BarItem::Volume),
-        Kind::Brightness | Kind::Media => None,
+        Kind::Brightness => None,
     }
 }
 
@@ -85,10 +85,16 @@ impl App {
                 .spacing(spacing.space_s)
                 .padding(spacing.space_m),
         );
-        let mut panels = vec![controls];
+        // As Windows 11: the notifications on top, what's playing in its own
+        // panel, the controls at the bottom by the bar.
+        let mut panels = Vec::with_capacity(3);
         if !editing {
             panels.push(panel(self.notifications_panel()));
+            if let Some(card) = self.media_card() {
+                panels.push(panel(widget::container(card).padding(spacing.space_s)));
+            }
         }
+        panels.push(controls);
         let column = widget::column::with_children(panels).spacing(PANEL_GAP);
         if editing {
             // The tools under the grid may outgrow the screen.
@@ -163,7 +169,6 @@ impl App {
                     self.brightness_slider()
                 }
             }
-            Kind::Media => self.media_card(),
         }
     }
 
@@ -180,7 +185,7 @@ impl App {
             .push(widget::icon::icon(icon(icon_name)).size(20))
             .spacing(10)
             .align_y(Alignment::Center);
-        if matches!(placed.fit, Fit::Pill | Fit::Horizontal | Fit::Full) {
+        if matches!(placed.fit, Fit::Pill | Fit::Horizontal) {
             content = content.push(
                 widget::text::body(placed.kind.name())
                     .font(cosmic::font::semibold())

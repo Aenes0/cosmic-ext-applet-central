@@ -150,14 +150,12 @@ pub enum Kind {
     Tile(Tile),
     Volume,
     Brightness,
-    /// What's playing.
-    Media,
 }
 
 impl Kind {
     /// Everything there can be, the sliders and media first.
     pub fn all() -> Vec<Kind> {
-        let mut all = vec![Kind::Volume, Kind::Brightness, Kind::Media];
+        let mut all = vec![Kind::Volume, Kind::Brightness];
         all.extend(Tile::ALL.into_iter().filter(|t| t.available()).map(Kind::Tile));
         all
     }
@@ -167,7 +165,6 @@ impl Kind {
             Kind::Tile(tile) => tile.id(),
             Kind::Volume => "volume",
             Kind::Brightness => "brightness",
-            Kind::Media => "media",
         }
     }
 
@@ -175,7 +172,6 @@ impl Kind {
         match id {
             "volume" => Some(Kind::Volume),
             "brightness" => Some(Kind::Brightness),
-            "media" => Some(Kind::Media),
             _ => Tile::from_id(id).map(Kind::Tile),
         }
     }
@@ -185,7 +181,6 @@ impl Kind {
             Kind::Tile(tile) => tile.name(),
             Kind::Volume => strings().volume,
             Kind::Brightness => crate::texts::texts().brightness,
-            Kind::Media => crate::texts::texts().media,
         }
     }
 
@@ -194,7 +189,6 @@ impl Kind {
             Kind::Tile(tile) => tile.icon(),
             Kind::Volume => "audio-volume-high-symbolic",
             Kind::Brightness => "display-brightness-symbolic",
-            Kind::Media => "audio-x-generic-symbolic",
         }
     }
 
@@ -203,7 +197,6 @@ impl Kind {
         match self {
             Kind::Tile(_) => &[Fit::Icon, Fit::Short, Fit::Pill],
             Kind::Volume | Kind::Brightness => &[Fit::Vertical, Fit::Horizontal],
-            Kind::Media => &[Fit::Full],
         }
     }
 }
@@ -221,8 +214,6 @@ pub enum Fit {
     Vertical,
     /// A slider across.
     Horizontal,
-    /// Across and two rows tall.
-    Full,
 }
 
 impl Fit {
@@ -233,12 +224,11 @@ impl Fit {
             Fit::Pill => "pill",
             Fit::Vertical => "vertical",
             Fit::Horizontal => "horizontal",
-            Fit::Full => "full",
         }
     }
 
     fn from_id(id: &str) -> Option<Fit> {
-        [Fit::Icon, Fit::Short, Fit::Pill, Fit::Vertical, Fit::Horizontal, Fit::Full]
+        [Fit::Icon, Fit::Short, Fit::Pill, Fit::Vertical, Fit::Horizontal]
             .into_iter()
             .find(|f| f.id() == id)
     }
@@ -251,7 +241,6 @@ impl Fit {
             Fit::Pill => t.fit_pill,
             Fit::Vertical => t.fit_vertical,
             Fit::Horizontal => t.fit_horizontal,
-            Fit::Full => t.fit_full,
         }
     }
 
@@ -263,7 +252,6 @@ impl Fit {
             Fit::Pill => (3, 1),
             Fit::Vertical => (1, 2),
             Fit::Horizontal => (COLUMNS, 1),
-            Fit::Full => (COLUMNS, 2),
         }
     }
 }
@@ -302,7 +290,6 @@ impl Placed {
         let fit = match kind {
             Kind::Tile(_) => Fit::Pill,
             Kind::Volume | Kind::Brightness => Fit::Horizontal,
-            Kind::Media => Fit::Full,
         };
         Placed { kind, fit }
     }

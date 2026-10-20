@@ -422,7 +422,6 @@ fn default_tiles() -> Vec<Placed> {
         at(Kind::Tile(Tile::Screenshot), Icon),
         at(Kind::Tile(Tile::Microphone), Icon),
         at(Kind::Tile(Tile::Workspaces), Icon),
-        at(Kind::Media, Full),
     ]
 }
 
@@ -440,9 +439,6 @@ fn load_tiles() -> Vec<Placed> {
         }
         if !has(&items, Kind::Volume) {
             items.insert(0, Placed::new(Kind::Volume));
-        }
-        if !has(&items, Kind::Media) {
-            items.push(Placed::new(Kind::Media));
         }
         let ids: Vec<String> = items.iter().map(|t| t.id()).collect();
         services::set_tiles(&ids);
