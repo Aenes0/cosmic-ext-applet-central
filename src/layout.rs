@@ -183,16 +183,20 @@ pub enum Section {
     Media,
     /// The month: folded, today only.
     Calendar,
+    /// What was copied; folded at first, being long.
+    Clipboard,
 }
 
 impl Section {
-    pub const ALL: [Section; 3] = [Section::Notifications, Section::Media, Section::Calendar];
+    pub const ALL: [Section; 4] =
+        [Section::Notifications, Section::Media, Section::Calendar, Section::Clipboard];
 
     fn id(self) -> &'static str {
         match self {
             Section::Notifications => "notifications",
             Section::Media => "media",
             Section::Calendar => "calendar",
+            Section::Clipboard => "clipboard",
         }
     }
 
@@ -205,7 +209,13 @@ impl Section {
             Section::Notifications => "notification-symbolic",
             Section::Media => "audio-x-generic-symbolic",
             Section::Calendar => "x-office-calendar-symbolic",
+            Section::Clipboard => "edit-paste-symbolic",
         }
+    }
+
+    /// Folded until opened.
+    fn folded_at_first(self) -> bool {
+        matches!(self, Section::Clipboard)
     }
 }
 
@@ -216,6 +226,11 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Whether a section shows folded: as picked, else as it comes.
+    pub fn is_folded(&self, section: Section) -> bool {
+        self.folded.contains(&section) != section.folded_at_first()
+    }
+
     pub fn load() -> Layout {
         let folded = get::<Vec<String>>("folded")
             .unwrap_or_default()

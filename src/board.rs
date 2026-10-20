@@ -116,6 +116,7 @@ impl App {
         // what's playing at the bottom, by the bar, with the volume.
         panels.push(panel(self.notifications_panel()));
         panels.push(panel(self.calendar_panel()));
+        panels.push(panel(self.clipboard_panel()));
         for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
             let mut rows: Vec<Element<'_, Message>> = Vec::new();
             if number == 0 && !editing {

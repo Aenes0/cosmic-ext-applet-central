@@ -81,7 +81,7 @@ impl App {
     /// the month, with arrows to the ones around it.
     pub fn calendar_panel(&self) -> Element<'_, Message> {
         let spacing = theme::spacing();
-        let folded = self.layout.folded.contains(&Section::Calendar);
+        let folded = self.layout.is_folded(Section::Calendar);
         let header = button::custom(
             widget::row::with_children(vec![
                 widget::icon::icon(icon("x-office-calendar-symbolic")).size(16).into(),

@@ -930,7 +930,7 @@ impl App {
         trailing: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let spacing = theme::spacing();
-        let open = !self.layout.folded.contains(&section);
+        let open = !self.layout.is_folded(section);
         let toggle = button::custom(
             widget::row::with_children(vec![
                 widget::icon::icon(icon(section.icon())).size(16).into(),
@@ -1176,7 +1176,7 @@ impl App {
         use crate::layout::Section;
         let tx = crate::texts::texts();
         let spacing = theme::spacing();
-        let folded = self.layout.folded.contains(&Section::Media);
+        let folded = self.layout.is_folded(Section::Media);
         let fold = |folded: bool| -> Element<'_, Message> {
             widget::tooltip(
                 button::icon(icon(if folded { "go-up-symbolic" } else { "go-down-symbolic" }))
@@ -1358,7 +1358,7 @@ impl App {
             format!("{} ({})", t.notifications, self.notifications.len()),
             Some(clear),
         );
-        if self.layout.folded.contains(&section) {
+        if self.layout.is_folded(section) {
             return widget::container(header).padding(spacing.space_s).into();
         }
 
