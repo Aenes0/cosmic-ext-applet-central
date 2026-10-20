@@ -111,6 +111,11 @@ pub enum Message {
     CloseAdding,
     /// A new bubble, or a line in the bubble given.
     AddStructure(Kind, usize),
+    /// The calendar a month on or back; back to this month.
+    CalendarShift(i32),
+    CalendarToday,
+    /// Every few seconds, for the clock on the bar.
+    ClockTick,
     /// Keeps the arrangement edited, or goes back to how it was.
     SaveEdit,
     CancelEdit,
@@ -286,6 +291,10 @@ pub struct App {
     pub(crate) primary_display: Option<String>,
     /// The item being resized by its handle, and its size when grabbed.
     pub(crate) resizing: Option<(usize, Fit)>,
+    /// The month the calendar shows.
+    pub(crate) calendar_month: crate::calendar::Month,
+    /// The clock's lines as last drawn: time and date.
+    clock: (String, String),
     /// When the monitors' brightness was last read, on opening.
     displays_read: Option<std::time::Instant>,
     /// The item under the pointer while editing: it shows its handle.
@@ -668,6 +677,7 @@ impl cosmic::Application for App {
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 self.page = Some(Page::Main);
+                self.calendar_month = crate::calendar::Month::now();
                 // The main monitor's brightness, for its slider: read when
                 // the popup opens, but not often, and only that one's (each
                 // DDC read stalls the GPU's I²C for a moment).
@@ -792,6 +802,9 @@ impl cosmic::Application for App {
                 self.add_target = bubble;
             }
             Message::CloseAdding => self.adding = false,
+            Message::CalendarShift(by) => self.calendar_month = self.calendar_month.shift(by),
+            Message::CalendarToday => self.calendar_month = crate::calendar::Month::now(),
+            Message::ClockTick => self.clock = crate::calendar::bar_lines(),
             Message::AddStructure(kind, bubble) => {
                 let mut trial = self.tiles.clone();
                 trial.insert(self.insert_at(bubble, kind), Placed::new(kind));
@@ -1565,6 +1578,10 @@ impl cosmic::Application for App {
                 _ => None,
             }));
         }
+        if self.panel_icons.get(BarItem::Clock) != Show::Never {
+            subscriptions
+                .push(iced::time::every(Duration::from_secs(5)).map(|_| Message::ClockTick));
+        }
         if self.dnd_until.is_some() {
             subscriptions.push(
                 iced::time::every(Duration::from_secs(20)).map(|_| Message::CheckDoNotDisturb),
@@ -1762,6 +1779,23 @@ impl cosmic::Application for App {
                 .on_right_press(Message::OpenAt(Page::Power))
                 .on_scroll(|delta| Message::ScrollBrightness(scroll_steps(delta)));
             icons.push(tip(area.into(), text));
+        }
+        // The clock last, as Windows 11's: the time over the date, smaller,
+        // both centered.
+        if shows(BarItem::Clock) != Show::Never {
+            let (time, date) = if self.clock.0.is_empty() {
+                crate::calendar::bar_lines()
+            } else {
+                self.clock.clone()
+            };
+            icons.push(
+                widget::column::with_children(vec![
+                    widget::text::body(time).into(),
+                    widget::text::caption(date).into(),
+                ])
+                .align_x(Alignment::Center)
+                .into(),
+            );
         }
         let icons: Element<'_, Message> = if horizontal {
             widget::row::with_children(icons)

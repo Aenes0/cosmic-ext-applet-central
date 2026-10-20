@@ -115,6 +115,7 @@ impl App {
         // The notifications on top, as Windows 11; the controls' bubbles;
         // what's playing at the bottom, by the bar, with the volume.
         panels.push(panel(self.notifications_panel()));
+        panels.push(panel(self.calendar_panel()));
         for (number, bubble) in split_bubbles(&self.tiles).into_iter().enumerate() {
             let mut rows: Vec<Element<'_, Message>> = Vec::new();
             if number == 0 && !editing {
@@ -605,6 +606,7 @@ impl App {
         }
         // The volume lives with what's playing, never on the grid.
         bar_only.push(BarItem::Volume);
+        bar_only.push(BarItem::Clock);
         items.push(widget::text::heading(tx.bar_only).into());
         let cards = bar_only
             .into_iter()

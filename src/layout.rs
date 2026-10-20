@@ -68,6 +68,8 @@ pub enum BarItem {
     Volume,
     Peripherals,
     Battery,
+    /// The time over the date, at the bar's end.
+    Clock,
 }
 
 impl BarItem {
@@ -80,6 +82,7 @@ impl BarItem {
             BarItem::Volume => "volume".into(),
             BarItem::Peripherals => "peripherals".into(),
             BarItem::Battery => "battery".into(),
+            BarItem::Clock => "clock".into(),
         }
     }
 
@@ -93,6 +96,7 @@ impl BarItem {
             BarItem::Volume => crate::i18n::strings().volume,
             BarItem::Peripherals => t.peripherals,
             BarItem::Battery => crate::i18n::strings().battery,
+            BarItem::Clock => t.clock,
         }
     }
 
@@ -105,6 +109,7 @@ impl BarItem {
             BarItem::Volume => "audio-volume-high-symbolic",
             BarItem::Peripherals => "input-mouse-symbolic",
             BarItem::Battery => "battery-good-symbolic",
+            BarItem::Clock => "preferences-system-time-symbolic",
         }
     }
 
@@ -113,7 +118,11 @@ impl BarItem {
     pub fn choices(self) -> &'static [Show] {
         match self {
             BarItem::Privacy => &[Show::Active, Show::Never],
-            BarItem::Network | BarItem::Volume | BarItem::Peripherals | BarItem::Battery => {
+            BarItem::Network
+            | BarItem::Volume
+            | BarItem::Peripherals
+            | BarItem::Battery
+            | BarItem::Clock => {
                 &[Show::Always, Show::Never]
             }
             BarItem::Notifications | BarItem::Tile(_) => &[Show::Always, Show::Active, Show::Never],
@@ -172,15 +181,18 @@ pub enum Section {
     Notifications,
     /// What's playing: folded, a line of it.
     Media,
+    /// The month: folded, today only.
+    Calendar,
 }
 
 impl Section {
-    pub const ALL: [Section; 2] = [Section::Notifications, Section::Media];
+    pub const ALL: [Section; 3] = [Section::Notifications, Section::Media, Section::Calendar];
 
     fn id(self) -> &'static str {
         match self {
             Section::Notifications => "notifications",
             Section::Media => "media",
+            Section::Calendar => "calendar",
         }
     }
 
@@ -192,6 +204,7 @@ impl Section {
         match self {
             Section::Notifications => "notification-symbolic",
             Section::Media => "audio-x-generic-symbolic",
+            Section::Calendar => "x-office-calendar-symbolic",
         }
     }
 }
