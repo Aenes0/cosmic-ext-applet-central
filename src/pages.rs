@@ -1558,12 +1558,12 @@ impl App {
         }
         row = row.push(widget::space::horizontal());
         // Only editing here: the rest are icons on the grid.
-        // Small and loose, at the end: settings, power, editing.
+        // Small and loose, at the end: editing, power, settings.
         let small = |name: &'static str, tooltip: &'static str, message: Message| {
             widget::tooltip(
                 button::icon(icon(name))
-                    .icon_size(12)
-                    .padding(3)
+                    .icon_size(15)
+                    .padding(4)
                     .class(theme::Button::Text)
                     .on_press(message),
                 widget::text::body(tooltip),
@@ -1572,13 +1572,13 @@ impl App {
         };
         // A thin line, unless the battery's pill needs the room.
         let row = row
-            .push(small("emblem-system-symbolic", t.settings, Message::Settings(None)))
+            .push(small("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)))
             .push(small("system-shutdown-symbolic", t.session, Message::ShowPage(Page::Session)))
-            .push(small("document-edit-symbolic", t.edit, Message::ShowPage(Page::Edit)));
+            .push(small("emblem-system-symbolic", t.settings, Message::Settings(None)));
         if self.battery.is_some() {
             row.into()
         } else {
-            row.height(Length::Fixed(18.0)).into()
+            row.height(Length::Fixed(24.0)).into()
         }
     }
 

@@ -160,7 +160,7 @@ impl App {
             let content = widget::column::with_children(rows).spacing(spacing.space_s);
             bottom.push(panel(match header {
                 Some(header) => widget::column::with_children(vec![header, content.into()])
-                    .spacing(2)
+                    .spacing(spacing.space_xs)
                     .padding([spacing.space_xxs, spacing.space_m, spacing.space_m, spacing.space_m]),
                 None => content.padding(spacing.space_m),
             }));
@@ -193,7 +193,9 @@ impl App {
             let mut bubble_height = padding;
             if number == 0 && !editing {
                 let top = f32::from(theme::spacing().space_m - theme::spacing().space_xxs);
-                bubble_height += if self.battery.is_some() { 36.0 } else { 18.0 } + 2.0 - top;
+                bubble_height += if self.battery.is_some() { 36.0 } else { 24.0 }
+                    + f32::from(theme::spacing().space_xs)
+                    - top;
                 if !self.privacy.is_empty() {
                     bubble_height += 48.0 + gap;
                 }
