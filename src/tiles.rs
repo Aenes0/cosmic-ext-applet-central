@@ -148,14 +148,13 @@ impl Tile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Tile(Tile),
-    Volume,
     Brightness,
 }
 
 impl Kind {
     /// Everything there can be, the sliders and media first.
     pub fn all() -> Vec<Kind> {
-        let mut all = vec![Kind::Volume, Kind::Brightness];
+        let mut all = vec![Kind::Brightness];
         all.extend(Tile::ALL.into_iter().filter(|t| t.available()).map(Kind::Tile));
         all
     }
@@ -163,14 +162,12 @@ impl Kind {
     fn id(self) -> &'static str {
         match self {
             Kind::Tile(tile) => tile.id(),
-            Kind::Volume => "volume",
             Kind::Brightness => "brightness",
         }
     }
 
     fn from_id(id: &str) -> Option<Kind> {
         match id {
-            "volume" => Some(Kind::Volume),
             "brightness" => Some(Kind::Brightness),
             _ => Tile::from_id(id).map(Kind::Tile),
         }
@@ -179,7 +176,6 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Tile(tile) => tile.name(),
-            Kind::Volume => strings().volume,
             Kind::Brightness => crate::texts::texts().brightness,
         }
     }
@@ -187,7 +183,6 @@ impl Kind {
     pub fn icon(self) -> &'static str {
         match self {
             Kind::Tile(tile) => tile.icon(),
-            Kind::Volume => "audio-volume-high-symbolic",
             Kind::Brightness => "display-brightness-symbolic",
         }
     }
@@ -196,7 +191,7 @@ impl Kind {
     pub fn fits(self) -> &'static [Fit] {
         match self {
             Kind::Tile(_) => &[Fit::Icon, Fit::Short, Fit::Pill],
-            Kind::Volume | Kind::Brightness => &[Fit::Vertical, Fit::Horizontal],
+            Kind::Brightness => &[Fit::Vertical, Fit::Horizontal],
         }
     }
 }
@@ -289,7 +284,7 @@ impl Placed {
     pub fn new(kind: Kind) -> Placed {
         let fit = match kind {
             Kind::Tile(_) => Fit::Pill,
-            Kind::Volume | Kind::Brightness => Fit::Horizontal,
+            Kind::Brightness => Fit::Horizontal,
         };
         Placed { kind, fit }
     }
@@ -643,7 +638,9 @@ mod tests {
             Some(Placed { kind: Kind::Tile(Tile::Wifi), fit: Fit::Icon })
         );
         assert_eq!(Placed::from_id("bluetooth").map(|p| p.fit), Some(Fit::Pill));
-        assert_eq!(Placed::from_id("volume:vertical").map(|p| p.fit), Some(Fit::Vertical));
-        assert_eq!(Placed::from_id("volume:pill").map(|p| p.fit), Some(Fit::Horizontal));
+        assert_eq!(Placed::from_id("brightness:vertical").map(|p| p.fit), Some(Fit::Vertical));
+        assert_eq!(Placed::from_id("brightness:pill").map(|p| p.fit), Some(Fit::Horizontal));
+        // The volume lives with what's playing now.
+        assert_eq!(Placed::from_id("volume:vertical"), None);
     }
 }

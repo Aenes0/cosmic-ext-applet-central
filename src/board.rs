@@ -55,7 +55,6 @@ pub fn bar_item(kind: Kind) -> Option<BarItem> {
     match kind {
         Kind::Tile(crate::tiles::Tile::Wifi) => Some(BarItem::Network),
         Kind::Tile(tile) => Some(BarItem::Tile(tile)),
-        Kind::Volume => Some(BarItem::Volume),
         Kind::Brightness => None,
     }
 }
@@ -85,16 +84,16 @@ impl App {
                 .spacing(spacing.space_s)
                 .padding(spacing.space_m),
         );
-        // As Windows 11: the notifications on top, what's playing in its own
-        // panel, the controls at the bottom by the bar.
+        // The notifications on top, as Windows 11; the controls; what's
+        // playing at the bottom, by the bar, with the volume.
         let mut panels = Vec::with_capacity(3);
         if !editing {
             panels.push(panel(self.notifications_panel()));
-            if let Some(card) = self.media_card() {
-                panels.push(panel(widget::container(card).padding(spacing.space_s)));
-            }
         }
         panels.push(controls);
+        if !editing {
+            panels.push(panel(self.media_panel()));
+        }
         let column = widget::column::with_children(panels).spacing(PANEL_GAP);
         if editing {
             // The tools under the grid may outgrow the screen.
@@ -136,23 +135,6 @@ impl App {
                     Fit::Short => short_tile(state),
                     _ => state.large(),
                 })
-            }
-            Kind::Volume => {
-                let volume = self.volume.as_ref()?;
-                if placed.fit == Fit::Vertical {
-                    let level = Level::new(
-                        widget::icon::icon(icon(self.volume_icon())).size(20),
-                        volume.level,
-                        |level| Message::SetVolume(level * 100.0),
-                    )
-                    .vertical()
-                    .on_release(Message::AdjustDone)
-                    .on_icon_press(Some(Message::ToggleMute))
-                    .dimmed(volume.muted);
-                    Some(standing(level, Page::Sound))
-                } else {
-                    self.volume_slider()
-                }
             }
             Kind::Brightness => {
                 if placed.fit == Fit::Vertical {
@@ -384,9 +366,8 @@ impl App {
         if !in_grid(Kind::Tile(crate::tiles::Tile::Wifi)) {
             bar_only.push(BarItem::Network);
         }
-        if !in_grid(Kind::Volume) {
-            bar_only.push(BarItem::Volume);
-        }
+        // The volume lives with what's playing, never on the grid.
+        bar_only.push(BarItem::Volume);
         tools.push(widget::text::heading(tx.bar_only).into());
         let mut cells = Cells::new(COLUMNS, 64.0, gap());
         for (n, item) in bar_only.into_iter().enumerate() {

@@ -170,14 +170,17 @@ impl PanelIcons {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
     Notifications,
+    /// What's playing: folded, a line of it.
+    Media,
 }
 
 impl Section {
-    pub const ALL: [Section; 1] = [Section::Notifications];
+    pub const ALL: [Section; 2] = [Section::Notifications, Section::Media];
 
     fn id(self) -> &'static str {
         match self {
             Section::Notifications => "notifications",
+            Section::Media => "media",
         }
     }
 
@@ -188,6 +191,7 @@ impl Section {
     pub fn icon(self) -> &'static str {
         match self {
             Section::Notifications => "notification-symbolic",
+            Section::Media => "audio-x-generic-symbolic",
         }
     }
 }

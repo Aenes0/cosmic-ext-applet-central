@@ -410,7 +410,6 @@ fn default_tiles() -> Vec<Placed> {
     use crate::tiles::Fit::*;
     let at = |kind, fit| Placed { kind, fit };
     vec![
-        at(Kind::Volume, Vertical),
         at(Kind::Brightness, Vertical),
         at(Kind::Tile(Tile::Wifi), Pill),
         at(Kind::Tile(Tile::DoNotDisturb), Icon),
@@ -436,9 +435,6 @@ fn load_tiles() -> Vec<Placed> {
         let has = |items: &Vec<Placed>, kind| items.iter().any(|p: &Placed| p.kind == kind);
         if !has(&items, Kind::Brightness) {
             items.insert(0, Placed::new(Kind::Brightness));
-        }
-        if !has(&items, Kind::Volume) {
-            items.insert(0, Placed::new(Kind::Volume));
         }
         let ids: Vec<String> = items.iter().map(|t| t.id()).collect();
         services::set_tiles(&ids);
@@ -766,6 +762,11 @@ impl cosmic::Application for App {
                 });
             }
             Message::ToggleMute => {
+                // At once, the bar's icon too; PipeWire then says the same.
+                if let Some(volume) = self.volume.as_mut() {
+                    volume.muted = !volume.muted;
+                    self.adjusting = Some(std::time::Instant::now());
+                }
                 return Task::future(async {
                     services::toggle_mute().await;
                     cosmic::action::app(Message::None)

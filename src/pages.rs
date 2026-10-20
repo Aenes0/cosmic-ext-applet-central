@@ -1166,9 +1166,112 @@ impl App {
                 }
             }
         }
-        Some(match color {
+        Some(media_box(card.into(), color))
+    }
+
+    /// What's playing, its own panel by the bar: the player, or a line of
+    /// it when folded, or that nothing plays; under it, the volume.
+    pub(crate) fn media_panel(&self) -> Element<'_, Message> {
+        use crate::layout::Section;
+        let tx = crate::texts::texts();
+        let spacing = theme::spacing();
+        let folded = self.layout.folded.contains(&Section::Media);
+        let fold = |folded: bool| -> Element<'_, Message> {
+            widget::tooltip(
+                button::icon(icon(if folded { "go-up-symbolic" } else { "go-down-symbolic" }))
+                    .padding(6)
+                    .class(theme::Button::Text)
+                    .on_press(Message::ToggleFold(Section::Media)),
+                widget::text::body(if folded { tx.unfold } else { tx.fold }),
+                widget::tooltip::Position::Top,
+            )
+            .into()
+        };
+        let mut column = widget::column::with_capacity(2).spacing(spacing.space_s);
+        match self.shown_media() {
+            Some(media) if folded => column = column.push(self.media_mini(media, fold(true))),
+            Some(_) => {
+                if let Some(card) = self.media_card() {
+                    // The fold's arrow on the card's corner.
+                    column = column.push(iced::widget::stack(vec![
+                        card,
+                        widget::container(fold(false))
+                            .width(Length::Fill)
+                            .align_x(iced::alignment::Horizontal::Right)
+                            .padding([2, 2, 0, 0])
+                            .into(),
+                    ]));
+                }
+            }
+            None => {
+                column = column.push(
+                    widget::row::with_children(vec![
+                        widget::icon::icon(icon("audio-x-generic-symbolic")).size(16).into(),
+                        widget::text::body(tx.nothing_playing)
+                            .class(theme::Text::Custom(dimmed))
+                            .into(),
+                    ])
+                    .spacing(spacing.space_xs)
+                    .align_y(Alignment::Center)
+                    .padding([4, spacing.space_xxs]),
+                );
+            }
+        }
+        if let Some(volume) = self.volume_slider() {
+            column = column.push(volume);
+        }
+        column.padding(spacing.space_s).into()
+    }
+
+    /// What's playing in a line: its cover, title, play and pause.
+    fn media_mini<'a>(&'a self, media: &'a crate::media::Media, fold: Element<'a, Message>) -> Element<'a, Message> {
+        let spacing = theme::spacing();
+        let cover: Element<'_, Message> = match &media.art {
+            Some(path) => widget::image(widget::image::Handle::from_path(path))
+                .width(Length::Fixed(36.0))
+                .height(Length::Fixed(36.0))
+                .content_fit(iced::ContentFit::Cover)
+                .border_radius(8.0)
+                .into(),
+            None => widget::icon::icon(icon("audio-x-generic-symbolic")).size(24).into(),
+        };
+        let one_line =
+            || iced::core::text::Ellipsize::End(iced::core::text::EllipsizeHeightLimit::Lines(1));
+        let play = button::icon(icon(if media.playing {
+            "media-playback-pause-symbolic"
+        } else {
+            "media-playback-start-symbolic"
+        }))
+        .icon_size(18)
+        .padding(8)
+        .on_press(Message::MediaControl(Control::PlayPause));
+        let row = widget::row::with_children(vec![
+            cover,
+            widget::column::with_children(vec![
+                widget::text::body(media.title.clone())
+                    .font(cosmic::font::semibold())
+                    .ellipsize(one_line())
+                    .into(),
+                widget::text::caption(media.artist.clone()).ellipsize(one_line()).into(),
+            ])
+            .width(Length::Fill)
+            .into(),
+            play.into(),
+            fold,
+        ])
+        .spacing(spacing.space_s)
+        .align_y(Alignment::Center);
+        media_box(row.into(), media.color)
+    }
+}
+
+/// What's playing on its card: in the cover's colors, as phones show it, or
+/// plain.
+fn media_box<'a>(content: Element<'a, Message>, color: Option<[u8; 3]>) -> Element<'a, Message> {
+    {
+        match color {
             // In the cover's colors, as phones show what's playing.
-            Some(color) => widget::container(card)
+            Some(color) => widget::container(content)
                 .padding(14)
                 .width(Length::Fill)
                 .class(theme::Container::custom(move |theme| {
@@ -1185,9 +1288,12 @@ impl App {
                     }
                 }))
                 .into(),
-            None => card_container(card).into(),
-        })
+            None => card_container(content).into(),
+        }
     }
+}
+
+impl App {
 
     /// The notifications received, newest first, with a way to clear them;
     /// or that there are none.
@@ -1455,9 +1561,10 @@ impl App {
         let volume = self.volume.as_ref()?;
         Some(Self::slider_row(
             // the icon mutes
+            // Muted, it empties; unmuted, it's back where it was.
             Level::new(
                 widget::icon::icon(icon(self.volume_icon())).size(20),
-                volume.level,
+                if volume.muted { 0.0 } else { volume.level },
                 |level| Message::SetVolume(level * 100.0),
             )
             .on_release(Message::AdjustDone)
