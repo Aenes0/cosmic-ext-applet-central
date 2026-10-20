@@ -1210,16 +1210,14 @@ impl App {
                 );
             }
         }
-        // Folded with a player, the volume goes low too.
-        let low = folded && self.shown_media().is_some();
-        if let Some(volume) = if low { self.volume_compact() } else { self.volume_slider() } {
+        if let Some(volume) = self.volume_compact() {
             column = column.push(volume);
         }
         column.padding(spacing.space_s).into()
     }
 
-    /// The volume, low: its icon, which mutes, a thin rail, the percentage,
-    /// a small arrow to the sound's page.
+    /// The volume: its icon, which mutes, a thin rail, the percentage, a
+    /// small arrow to the sound's page.
     fn volume_compact(&self) -> Option<Element<'_, Message>> {
         let volume = self.volume.as_ref()?;
         let spacing = theme::spacing();
@@ -1581,23 +1579,6 @@ impl App {
         .spacing(theme::spacing().space_xs)
         .align_y(Alignment::Center)
         .into()
-    }
-
-    pub(crate) fn volume_slider(&self) -> Option<Element<'_, Message>> {
-        let volume = self.volume.as_ref()?;
-        Some(Self::slider_row(
-            // the icon mutes
-            // Muted, it empties; unmuted, it's back where it was.
-            Level::new(
-                widget::icon::icon(icon(self.volume_icon())).size(20),
-                if volume.muted { 0.0 } else { volume.level },
-                |level| Message::SetVolume(level * 100.0),
-            )
-            .on_release(Message::AdjustDone)
-            .on_icon_press(Some(Message::ToggleMute))
-            .dimmed(volume.muted),
-            Message::ShowPage(Page::Sound),
-        ))
     }
 
     /// The main monitor's brightness, over DDC; or the screen's, as COSMIC
