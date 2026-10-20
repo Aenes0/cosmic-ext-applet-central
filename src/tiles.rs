@@ -599,7 +599,11 @@ pub fn slider_end<'a>(icon_name: &str, message: Message, standing: bool) -> Elem
     if standing {
         surface.round(Round::Top).height(Length::Fixed(36.0)).into()
     } else {
-        surface.round(Round::End).width(Length::Fixed(44.0)).into()
+        surface
+            .round(Round::End)
+            .width(Length::Fixed(44.0))
+            .height(Length::Fixed(44.0))
+            .into()
     }
 }
 

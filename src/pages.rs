@@ -1572,13 +1572,17 @@ impl App {
 
     /// A thick slider, as phones have them, with a round arrow to its page.
     fn slider_row(level: Level<'static, Message>, more: Message) -> Element<'static, Message> {
-        widget::row::with_children(vec![
-            level.joined().into(),
-            crate::tiles::slider_end("go-next-symbolic", more, false),
-        ])
-        .spacing(2)
-        .height(Length::Fixed(44.0))
-        .align_y(Alignment::Center)
+        // As tall as the slider, in the middle of the grid's taller row.
+        widget::container(
+            widget::row::with_children(vec![
+                level.joined().into(),
+                crate::tiles::slider_end("go-next-symbolic", more, false),
+            ])
+            .spacing(2)
+            .height(Length::Fixed(44.0))
+            .align_y(Alignment::Center),
+        )
+        .center_y(Length::Fill)
         .into()
     }
 
