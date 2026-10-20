@@ -286,6 +286,8 @@ pub struct App {
     pub(crate) primary_display: Option<String>,
     /// The item being resized by its handle, and its size when grabbed.
     pub(crate) resizing: Option<(usize, Fit)>,
+    /// When the monitors' brightness was last read, on opening.
+    displays_read: Option<std::time::Instant>,
     /// The item under the pointer while editing: it shows its handle.
     pub(crate) hovered: Option<usize>,
     /// The arrangement as it was when editing began: back to it on cancel.
@@ -435,7 +437,7 @@ impl App {
                 load_mixer(),
             ]),
             Page::Displays => Task::future(async {
-                cosmic::action::app(Message::Displays(services::displays().await))
+                cosmic::action::app(Message::Displays(services::displays(services::DdcRead::All).await))
             }),
             _ => Task::none(),
         }
@@ -666,11 +668,21 @@ impl cosmic::Application for App {
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 self.page = Some(Page::Main);
-                // The monitors, for the main brightness slider: read when the
-                // popup opens, not by each screen's applet all the time.
-                let displays = Task::future(async {
-                    cosmic::action::app(Message::Displays(services::displays().await))
-                });
+                // The main monitor's brightness, for its slider: read when
+                // the popup opens, but not often, and only that one's (each
+                // DDC read stalls the GPU's I²C for a moment).
+                let stale = self.displays_read.is_none_or(|at| at.elapsed() > Duration::from_secs(120));
+                let displays = if stale {
+                    self.displays_read = Some(std::time::Instant::now());
+                    let main = self.primary_display.clone();
+                    Task::future(async move {
+                        cosmic::action::app(Message::Displays(
+                            services::displays(services::DdcRead::Main(main)).await,
+                        ))
+                    })
+                } else {
+                    Task::none()
+                };
                 return Task::batch([displays, cosmic::surface::surface_task(cosmic::surface::action::app_popup(
                     |_: &Self| Default::default(),
                     move |app: &mut Self| {
@@ -1084,7 +1096,21 @@ impl cosmic::Application for App {
                     cosmic::action::app(Message::None)
                 });
             }
-            Message::Displays(displays) => self.displays = Some(displays),
+            Message::Displays(mut displays) => {
+                // Levels not read this time: as they were.
+                for display in &mut displays {
+                    if let Some((number, u32::MAX, _)) = display.ddc {
+                        display.ddc = self
+                            .displays
+                            .as_ref()
+                            .and_then(|old| old.iter().find(|d| d.name == display.name))
+                            .and_then(|d| d.ddc)
+                            .filter(|(_, level, _)| *level != u32::MAX)
+                            .or(Some((number, 100, 100)));
+                    }
+                }
+                self.displays = Some(displays);
+            }
             Message::Workspaces(event) => match event {
                 workspaces::Event::Ready(tx) => self.workspaces_tx = Some(tx),
                 workspaces::Event::Tiling(tiling) => self.workspace_tiling = Some(tiling),
@@ -1307,7 +1333,7 @@ impl cosmic::Application for App {
                 let display = display.clone();
                 return Task::future(async move {
                     services::set_scale(display, scale).await;
-                    cosmic::action::app(Message::Displays(services::displays().await))
+                    cosmic::action::app(Message::Displays(services::displays(services::DdcRead::All).await))
                 });
             }
             Message::SetDdcBrightness(index, percent) => {
@@ -1828,6 +1854,8 @@ impl cosmic::Application for App {
                 },
             ])
             .spacing(pages::PANEL_GAP)
+            // Its foot level with the panel's, by the bar.
+            .align_y(Alignment::End)
             .into(),
             Page::Wifi => pages::panel(self.wifi_page()),
             Page::Vpn => pages::panel(self.vpn_page()),

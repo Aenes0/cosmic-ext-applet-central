@@ -1110,8 +1110,42 @@ async fn ddc_brightness(number: u32) -> Option<(u32, u32)> {
     None
 }
 
-/// External monitors `ddcutil` can talk to, by connector: their display numbers.
+/// External monitors `ddcutil` can talk to, by connector: their display
+/// numbers. Detecting them keeps the GPU's I²C busy for half a second, which
+/// on NVIDIA stutters the whole desktop, the pointer too: so it's done once,
+/// and kept for this session in a file the other screens' applets read.
 async fn ddc_displays() -> HashMap<String, u32> {
+    static KNOWN: std::sync::Mutex<Option<HashMap<String, u32>>> = std::sync::Mutex::new(None);
+    if let Some(known) = KNOWN.lock().unwrap().clone() {
+        return known;
+    }
+    let file = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())
+        + "/central-ddc-displays";
+    let parse = |text: &str| -> HashMap<String, u32> {
+        text.lines()
+            .filter_map(|line| {
+                let (name, number) = line.split_once(' ')?;
+                Some((name.to_owned(), number.parse().ok()?))
+            })
+            .collect()
+    };
+    if let Ok(text) = std::fs::read_to_string(&file)
+        && !text.trim().is_empty()
+    {
+        let known = parse(&text);
+        *KNOWN.lock().unwrap() = Some(known.clone());
+        return known;
+    }
+    let found = detect_ddc().await;
+    if !found.is_empty() {
+        let text: String = found.iter().map(|(name, n)| format!("{name} {n}\n")).collect();
+        _ = std::fs::write(&file, text);
+        *KNOWN.lock().unwrap() = Some(found.clone());
+    }
+    found
+}
+
+async fn detect_ddc() -> HashMap<String, u32> {
     let Ok(output) = ddcutil(["detect", "--brief"])
         .output()
         .await
@@ -1144,7 +1178,16 @@ fn parse_vcp(output: &str) -> Option<(u32, u32)> {
     }
 }
 
-pub async fn displays() -> Vec<Display> {
+/// Whose brightness to read over DDC, each read being slow and heavy.
+#[derive(Clone, Debug)]
+pub enum DdcRead {
+    /// Every monitor's, for the page of displays.
+    All,
+    /// Only this one's, by connector; or, none given, the biggest one's.
+    Main(Option<String>),
+}
+
+pub async fn displays(read: DdcRead) -> Vec<Display> {
     let Ok(output) = crate::host::command("cosmic-randr", &[])
         .args(["list", "--kdl"])
         .output()
@@ -1155,10 +1198,24 @@ pub async fn displays() -> Vec<Display> {
     let mut displays = parse_displays(&String::from_utf8_lossy(&output.stdout));
     if displays.iter().any(|d| d.enabled && !d.internal()) {
         let ddc = ddc_displays().await;
+        let main = match &read {
+            DdcRead::All => None,
+            DdcRead::Main(Some(name)) if ddc.contains_key(name) => Some(name.clone()),
+            DdcRead::Main(_) => displays
+                .iter()
+                .filter(|d| d.enabled && ddc.contains_key(&d.name))
+                .max_by_key(|d| d.width * d.height)
+                .map(|d| d.name.clone()),
+        };
         for display in &mut displays {
             let Some(&number) = ddc.get(&display.name) else {
                 continue;
             };
+            if main.as_ref().is_some_and(|main| *main != display.name) {
+                // Known to have DDC, its level unread: kept from before.
+                display.ddc = Some((number, u32::MAX, 100));
+                continue;
+            }
             if let Some((current, max)) = ddc_brightness(number).await {
                 display.ddc = Some((number, current, max));
             }
