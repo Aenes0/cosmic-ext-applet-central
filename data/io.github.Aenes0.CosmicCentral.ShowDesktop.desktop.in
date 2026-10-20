@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Show desktop
+Name[pt_BR]=Mostrar área de trabalho
+Comment=Minimizes every window, and brings them back, as on Windows
+Comment[pt_BR]=Minimiza todas as janelas e as traz de volta, como no Windows
+Type=Application
+Exec=@bindir@/cosmic-ext-applet-central --show-desktop
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Desktop;Windows;Minimize;
+Icon=user-desktop-symbolic
+NoDisplay=true
+X-CosmicApplet=true
+X-HostWaylandDisplay=true

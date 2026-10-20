@@ -13,7 +13,9 @@ bin=cosmic-ext-applet-central
 cargo build --release
 install -Dm0755 "target/release/$bin" "$prefix/bin/$bin"
 mkdir -p "$prefix/share/applications"
-sed "s|@bindir@|$prefix/bin|" "data/$id.desktop.in" > "$prefix/share/applications/$id.desktop"
+for entry in "$id" "$id.ShowDesktop"; do
+    sed "s|@bindir@|$prefix/bin|" "data/$entry.desktop.in" > "$prefix/share/applications/$entry.desktop"
+done
 install -Dm0644 "data/$id.metainfo.xml" "$prefix/share/metainfo/$id.metainfo.xml"
 install -Dm0644 "data/icons/scalable/apps/$id.svg" "$prefix/share/icons/hicolor/scalable/apps/$id.svg"
 echo "Installed. Add \"Central\" in Settings > Desktop > Panel > Applets."

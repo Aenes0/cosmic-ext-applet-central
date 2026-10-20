@@ -14,6 +14,7 @@ mod media;
 mod notifications;
 mod pages;
 mod services;
+mod show_desktop;
 mod texts;
 mod tiles;
 mod transition;
@@ -30,5 +31,9 @@ fn main() -> cosmic::iced::Result {
                 .unwrap_or_else(|_| "warn,cosmic_ext_applet_central=info".into()),
         )
         .init();
+    // The same program is also the "show desktop" button, its own applet.
+    if std::env::args().any(|arg| arg == "--show-desktop") {
+        return cosmic::applet::run::<show_desktop::ShowDesktop>(());
+    }
     cosmic::applet::run::<app::App>(())
 }
