@@ -56,6 +56,7 @@ pub enum Page {
     Tiling,
     DoNotDisturb,
     Session,
+    Camera,
 }
 
 impl Page {
@@ -72,6 +73,7 @@ impl Page {
             "tiling" => Page::Tiling,
             "dnd" => Page::DoNotDisturb,
             "session" => Page::Session,
+            "camera" => Page::Camera,
             _ => return None,
         })
     }
@@ -154,6 +156,16 @@ pub enum Message {
     ToggleHotEdge,
     /// Hot Edge's own settings app.
     OpenHotEdge,
+    /// The camera's service on or off; restarted.
+    ToggleCamera,
+    RestartCamera,
+    /// Asks how the camera is: on opening, and now and then on its page.
+    ReadCamera,
+    /// How the camera is, read; and after starting, stopping or restarting it.
+    Camera(services::Camera),
+    CameraDone(services::Camera),
+    /// Iriun's window on the computer shown (true) or hidden, by the service.
+    IriunWindow(bool),
     /// A screen's name and height.
     Output(Option<String>, Option<i32>),
     /// The panel's screen's height, turned or not, from cosmic-randr.
@@ -300,6 +312,10 @@ pub struct App {
     pub(crate) inhibit: Option<u32>,
     pub(crate) touchpad: Option<services::Touchpad>,
     pub(crate) hot_edge: bool,
+    pub(crate) camera: services::Camera,
+    /// Starts, stops or restarts of the camera not done yet: what's read
+    /// meanwhile is from before, and would undo what the tile shows.
+    camera_busy: usize,
     pub(crate) bar_spacing: BarSpacing,
     pub(crate) panel_icons: PanelIcons,
     pub(crate) layout: Layout,
@@ -470,6 +486,7 @@ impl App {
             Page::Displays => Task::future(async {
                 cosmic::action::app(Message::Displays(services::displays(services::DdcRead::All).await))
             }),
+            Page::Camera => read_camera(),
             _ => Task::none(),
         }
     }
@@ -576,6 +593,21 @@ fn load_wifi(scan: bool, delay: Duration) -> app::Task<Message> {
 
 fn spawn(program: &str, args: &[&str]) {
     crate::host::spawn(program, args);
+}
+
+/// How the camera is, off the UI's thread: systemctl and a file.
+fn read_camera() -> app::Task<Message> {
+    if !Tile::Camera.available() {
+        return Task::none();
+    }
+    Task::future(async { cosmic::action::app(Message::Camera(services::camera().await)) })
+}
+
+/// The camera's unit started, stopped or restarted, then read again.
+fn camera_command(verb: &'static str) -> app::Task<Message> {
+    Task::future(async move {
+        cosmic::action::app(Message::CameraDone(services::camera_command(verb).await))
+    })
 }
 
 fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
@@ -694,7 +726,8 @@ impl cosmic::Application for App {
             }),
             None => Task::none(),
         };
-        (app, task)
+        // For the bar's icon, before the popup first opens.
+        (app, Task::batch([task, read_camera()]))
     }
 
     fn core(&self) -> &app::Core {
@@ -740,7 +773,7 @@ impl cosmic::Application for App {
                 } else {
                     Task::none()
                 };
-                return Task::batch([displays, cosmic::surface::surface_task(cosmic::surface::action::app_popup(
+                return Task::batch([displays, read_camera(), cosmic::surface::surface_task(cosmic::surface::action::app_popup(
                     |_: &Self| Default::default(),
                     move |app: &mut Self| {
                         let mut settings =
@@ -1158,6 +1191,55 @@ impl cosmic::Application for App {
             Message::OpenHotEdge => {
                 spawn("cosmic-ext-hot-edge", &[]);
                 return self.close_popup();
+            }
+            Message::ToggleCamera => {
+                // At once, as the other tiles; then as it really is.
+                let verb = if self.camera.on { "stop" } else { "start" };
+                self.camera = services::Camera {
+                    on: !self.camera.on,
+                    status: None,
+                };
+                self.camera_busy += 1;
+                return camera_command(verb);
+            }
+            Message::RestartCamera => {
+                self.camera = services::Camera {
+                    on: true,
+                    status: None,
+                };
+                self.camera_busy += 1;
+                return camera_command("restart");
+            }
+            Message::ReadCamera => {
+                if self.camera_busy == 0 {
+                    return read_camera();
+                }
+            }
+            Message::Camera(camera) => {
+                if self.camera_busy == 0 {
+                    self.camera = camera;
+                    }
+            }
+            Message::CameraDone(camera) => {
+                self.camera_busy = self.camera_busy.saturating_sub(1);
+                // The last one done tells how it ended up.
+                if self.camera_busy == 0 {
+                    self.camera = camera;
+                    }
+            }
+            Message::IriunWindow(show) => {
+                // At once, as asked; then as the service wrote it down.
+                if let Some(status) = &mut self.camera.status {
+                    status.pc_window = Some(if show {
+                        services::PcWindow::Shown
+                    } else {
+                        services::PcWindow::Hidden
+                    });
+                }
+                self.camera_busy += 1;
+                return Task::future(async move {
+                    cosmic::action::app(Message::CameraDone(services::camera_window(show).await))
+                });
             }
             Message::ToggleKeepAwake => {
                 return match self.inhibit.take() {
@@ -1698,6 +1780,12 @@ impl cosmic::Application for App {
                 iced::time::every(Duration::from_secs(20)).map(|_| Message::CheckDoNotDisturb),
             );
         }
+        // The service writes down how it is every couple of seconds: for its
+        // page, and for the tile's subtitle while it's on.
+        if self.popup.is_some() && (self.page == Some(Page::Camera) || self.camera.on) {
+            subscriptions
+                .push(iced::time::every(Duration::from_secs(2)).map(|_| Message::ReadCamera));
+        }
         if self.popup.is_some() && self.shown_media().is_some_and(|m| m.playing) {
             subscriptions
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick));
@@ -1818,6 +1906,7 @@ impl cosmic::Application for App {
                 Tile::Power => Page::Power,
                 Tile::DoNotDisturb => Page::DoNotDisturb,
                 Tile::Tiling => Page::Tiling,
+                Tile::Camera => Page::Camera,
                 _ => Page::Main,
             };
             let text = match &state.subtitle {
@@ -2024,6 +2113,7 @@ impl cosmic::Application for App {
             Page::Tiling => pages::panel(self.tiling_page()),
             Page::DoNotDisturb => pages::panel(self.dnd_page()),
             Page::Session => pages::panel(self.session_page()),
+            Page::Camera => pages::panel(self.camera_page()),
         };
         // Editing is the main page in place: it fades, the others slide.
         let depth = if matches!(page, Page::Main | Page::Edit) { 0 } else { 1 };
@@ -2044,5 +2134,20 @@ impl cosmic::Application for App {
 
     fn on_close_requested(&self, id: window::Id) -> Option<Message> {
         Some(Message::Closed(id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_page_by_name() {
+        assert_eq!(Page::from_name("camera"), Some(Page::Camera));
+    }
+
+    #[test]
+    fn the_camera_is_not_on_the_panel_at_first() {
+        assert!(!default_tiles().iter().any(|p| p.kind == Kind::Tile(Tile::Camera)));
     }
 }

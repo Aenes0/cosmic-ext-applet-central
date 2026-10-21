@@ -715,6 +715,86 @@ impl App {
         )
     }
 
+    /// The phone as a webcam: how each part is, what went wrong, and a
+    /// restart. Off, only that: the service's file may be from before.
+    pub fn camera_page(&self) -> Element<'_, Message> {
+        let t = strings();
+        let spacing = theme::spacing();
+        let camera = &self.camera;
+        let mut body = Vec::new();
+        match &camera.status {
+            _ if !camera.on => body.push(note(t.camera_off)),
+            // Just started, or a file that doesn't read.
+            None => body.push(note(t.loading)),
+            Some(status) => {
+                if let Some(state) = status.state {
+                    body.push(padded_control(widget::text::heading(camera_state(state))).into());
+                }
+                if let Some(error) = &status.error {
+                    body.push(
+                        padded_control(
+                            widget::row::with_children(vec![
+                                widget::icon::icon(icon("dialog-warning-symbolic")).size(20).into(),
+                                widget::text::body(error.as_str())
+                                    .class(theme::Text::Custom(destructive))
+                                    .width(Length::Fill)
+                                    .into(),
+                            ])
+                            .spacing(spacing.space_s)
+                            .align_y(Alignment::Center),
+                        )
+                        .into(),
+                    );
+                }
+                for (icon_name, label, on) in [
+                    ("computer-symbolic", t.camera_pc_iriun, status.pc_iriun),
+                    ("phone-symbolic", t.camera_phone_connected, status.phone_connected),
+                    ("camera-web-symbolic", t.camera_phone_iriun, status.phone_iriun),
+                    ("display-brightness-symbolic", t.camera_screen_off, status.screen_off),
+                ] {
+                    let mark = if on {
+                        check()
+                    } else {
+                        widget::text::body("—").class(theme::Text::Custom(dimmed)).into()
+                    };
+                    body.push(
+                        padded_control(
+                            widget::row::with_children(vec![
+                                widget::icon::icon(icon(icon_name)).size(20).into(),
+                                widget::text::body(label).width(Length::Fill).into(),
+                                mark,
+                            ])
+                            .spacing(spacing.space_s)
+                            .align_y(Alignment::Center),
+                        )
+                        .into(),
+                    );
+                }
+            }
+        }
+        if camera.on {
+            body.push(padded_control(widget::divider::horizontal::default()).into());
+            // Iriun's window, kept out of sight, back on demand.
+            if let Some(window) = camera.status.as_ref().and_then(|s| s.pc_window) {
+                let (icon_name, label, show) = match window {
+                    services::PcWindow::Hidden => ("window-restore-symbolic", t.iriun_show_window, true),
+                    services::PcWindow::Shown => ("window-minimize-symbolic", t.iriun_hide_window, false),
+                };
+                body.push(
+                    item(icon_name, label.to_owned(), None, None)
+                        .on_press(Message::IriunWindow(show))
+                        .into(),
+                );
+            }
+            body.push(
+                item("system-reboot-symbolic", t.restart.to_owned(), None, None)
+                    .on_press(Message::RestartCamera)
+                    .into(),
+            );
+        }
+        self.page(t.camera, Some((camera.on, Message::ToggleCamera)), body, None)
+    }
+
     pub fn session_page(&self) -> Element<'_, Message> {
         let t = strings();
         let body = [
@@ -1924,6 +2004,21 @@ impl App {
                     Some(Message::OpenHotEdge),
                 )
             }
+            Tile::Camera => {
+                if !tile.available() {
+                    return None;
+                }
+                // While on, how it's going: waiting for the phone, say.
+                let state = self.camera.status.as_ref().and_then(|s| s.state);
+                TileState::new(
+                    tile.icon(),
+                    t.camera,
+                    state.filter(|_| self.camera.on).map(|state| camera_state(state).to_owned()),
+                    self.camera.on,
+                    Some(Message::ToggleCamera),
+                    Some(Message::ShowPage(Page::Camera)),
+                )
+            }
             Tile::Touchpad => {
                 let touchpad = self.touchpad?;
                 TileState::new(
@@ -1941,6 +2036,25 @@ impl App {
                 )
             }
         })
+    }
+}
+
+fn camera_state(state: services::CameraState) -> &'static str {
+    let t = strings();
+    match state {
+        services::CameraState::Starting => t.camera_starting,
+        services::CameraState::WaitingPhone => t.camera_waiting_phone,
+        services::CameraState::Active => t.camera_active,
+        services::CameraState::Error => t.camera_error,
+        services::CameraState::Stopped => t.camera_off,
+    }
+}
+
+/// What went wrong, in red.
+fn destructive(theme: &cosmic::Theme) -> iced::widget::text::Style {
+    iced::widget::text::Style {
+        color: Some(theme.cosmic().destructive_color().into()),
+        ..Default::default()
     }
 }
 

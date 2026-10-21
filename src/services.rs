@@ -1688,6 +1688,217 @@ pub fn set_hot_edge(enabled: bool) {
     }
 }
 
+/// The phone as a webcam, through Iriun: a user unit of its own
+/// (iriun-adb) opens Iriun on the computer and on the phone, keeps them up,
+/// and tells how they are in a file.
+const CAMERA_UNIT: &str = "iriun-camera.service";
+
+/// A directory of the user's on the host, as `$XDG_<name>_HOME` or under
+/// the home: in a sandbox, the host's, which Flatpak hands as
+/// `$HOST_XDG_<name>_HOME`.
+fn user_dir(name: &str, under_home: &str) -> Option<std::path::PathBuf> {
+    let host = if crate::host::in_flatpak() { "HOST_" } else { "" };
+    std::env::var_os(format!("{host}XDG_{name}_HOME"))
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(under_home)))
+}
+
+/// Whether the unit is installed, where systemd looks for the user's own.
+/// Looked at again now and then, not each time the popup draws, so that it
+/// shows soon after it's installed. The applet runs on the host, where the
+/// file is; in a sandbox the path is the same, and with no access to it the
+/// tile only doesn't show.
+pub fn camera_installed() -> bool {
+    use std::{sync::Mutex, time::{Duration, Instant}};
+    static CHECKED: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    let Ok(mut checked) = CHECKED.lock() else {
+        return false;
+    };
+    match *checked {
+        Some((at, installed)) if at.elapsed() < Duration::from_secs(10) => installed,
+        _ => {
+            let installed = user_dir("CONFIG", ".config")
+                .is_some_and(|dir| dir.join("systemd/user").join(CAMERA_UNIT).exists());
+            *checked = Some((Instant::now(), installed));
+            installed
+        }
+    }
+}
+
+/// How the service is, as it last wrote it down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraState {
+    Starting,
+    WaitingPhone,
+    Active,
+    Error,
+    Stopped,
+}
+
+/// Each part the service looks after, and what went wrong, ready to show.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CameraStatus {
+    /// None when the file says none the applet knows.
+    pub state: Option<CameraState>,
+    pub pc_iriun: bool,
+    pub phone_connected: bool,
+    pub phone_iriun: bool,
+    pub screen_off: bool,
+    pub error: Option<String>,
+    /// Iriun's window on the computer: none when it has none, or the file
+    /// says something else.
+    pub pc_window: Option<PcWindow>,
+}
+
+/// Iriun's window on the computer, which the service keeps out of sight
+/// (withdrawn, off the taskbar and dock too) and brings back on a signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PcWindow {
+    Hidden,
+    Shown,
+}
+
+/// The camera now: whether the unit runs, and, if so, its status.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Camera {
+    pub on: bool,
+    pub status: Option<CameraStatus>,
+}
+
+/// What `systemctl is-active` prints: on while starting too.
+fn camera_active(output: &str) -> bool {
+    matches!(output.trim(), "active" | "activating")
+}
+
+/// The service's `status.json`; what's missing is off. Anything but an
+/// object of that shape is no status at all.
+fn parse_camera_status(text: &[u8]) -> Option<CameraStatus> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(default)]
+    struct File {
+        state: Option<String>,
+        pc_iriun: bool,
+        phone_connected: bool,
+        phone_iriun: bool,
+        screen_off: bool,
+        error: Option<String>,
+        /// Any value: an odd one is no window, not a broken file.
+        pc_window: serde_json::Value,
+    }
+    let file: File = serde_json::from_slice(text).ok()?;
+    let state = match file.state.as_deref() {
+        Some("starting") => Some(CameraState::Starting),
+        Some("waiting_phone") => Some(CameraState::WaitingPhone),
+        Some("active") => Some(CameraState::Active),
+        Some("error") => Some(CameraState::Error),
+        Some("stopped") => Some(CameraState::Stopped),
+        _ => None,
+    };
+    Some(CameraStatus {
+        state,
+        pc_iriun: file.pc_iriun,
+        phone_connected: file.phone_connected,
+        phone_iriun: file.phone_iriun,
+        screen_off: file.screen_off,
+        error: file.error.filter(|error| !error.trim().is_empty()),
+        pc_window: match file.pc_window.as_str() {
+            Some("hidden") => Some(PcWindow::Hidden),
+            Some("shown") => Some(PcWindow::Shown),
+            _ => None,
+        },
+    })
+}
+
+/// Whether the unit runs and how it is. Off, the file is left alone: it may
+/// be from an earlier run.
+pub async fn camera() -> Camera {
+    let output = crate::host::command("systemctl", &[])
+        .args(["--user", "is-active", CAMERA_UNIT])
+        .output()
+        .await;
+    // Not active, it exits with an error: what it prints says which.
+    let on = match output {
+        Ok(output) => camera_active(&String::from_utf8_lossy(&output.stdout)),
+        Err(err) => {
+            tracing::warn!("cannot ask systemd about the camera: {err}");
+            false
+        }
+    };
+    if !on {
+        return Camera { on, status: None };
+    }
+    let path = user_dir("STATE", ".local/state").map(|dir| dir.join("iriun-adb/status.json"));
+    let status = match path {
+        Some(path) => crate::host::read(&path).await.as_deref().and_then(parse_camera_status),
+        None => None,
+    };
+    Camera { on, status: live_camera_status(status) }
+}
+
+/// With the unit running, "stopped" is the last run's file, before the
+/// service writes its first: loading, not off.
+fn live_camera_status(status: Option<CameraStatus>) -> Option<CameraStatus> {
+    status.filter(|status| status.state != Some(CameraState::Stopped))
+}
+
+/// The unit started, stopped or restarted (`start`, `stop`, `restart`);
+/// then how it is. Stopping waits for the service to put the phone back.
+pub async fn camera_command(verb: &'static str) -> Camera {
+    let status = crate::host::command("systemctl", &[])
+        .args(["--user", verb, CAMERA_UNIT])
+        .status()
+        .await;
+    match status {
+        Ok(status) if !status.success() => tracing::warn!("cannot {verb} the camera: {status}"),
+        Err(err) => tracing::warn!("cannot {verb} the camera: {err}"),
+        Ok(_) => {}
+    }
+    camera().await
+}
+
+/// Iriun's window on the computer shown (true) or hidden, by a signal to
+/// the service's main process (SIGUSR1 shows, SIGUSR2 hides); then how the
+/// camera is.
+pub async fn camera_window(show: bool) -> Camera {
+    let signal = if show { "SIGUSR1" } else { "SIGUSR2" };
+    let status = crate::host::command("systemctl", &[])
+        .args(["--user", "kill", "--kill-whom=main", "-s", signal, CAMERA_UNIT])
+        .status()
+        .await;
+    match status {
+        Ok(status) if !status.success() => tracing::warn!("cannot signal the camera's window: {status}"),
+        Err(err) => tracing::warn!("cannot signal the camera's window: {err}"),
+        Ok(_) => {}
+    }
+    // The service writes it down once done: a little while for that, or
+    // the button would flip back until the page reads again.
+    let wanted = if show { PcWindow::Shown } else { PcWindow::Hidden };
+    let mut now = camera().await;
+    for _ in 0..CAMERA_WINDOW_TRIES {
+        if camera_window_settled(&now, wanted) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        now = camera().await;
+    }
+    now
+}
+
+/// Done waiting for the window: the camera off, or its file no longer
+/// telling the window as it was (as wanted, or no window at all).
+fn camera_window_settled(camera: &Camera, wanted: PcWindow) -> bool {
+    !camera.on
+        || camera
+            .status
+            .as_ref()
+            .is_some_and(|status| status.pc_window.is_none_or(|window| window == wanted))
+}
+
+/// How many times, a tenth of a second apart, the window's change is
+/// looked for in the service's file.
+const CAMERA_WINDOW_TRIES: usize = 10;
+
 /// Whether the bar leaves out the icons of the tiles that are on.
 pub const HIDE_ACTIVE: Setting = Setting {
     config: crate::APP_ID,
@@ -1779,5 +1990,107 @@ output "HDMI-A-1" enabled=#false {
             })
         );
         assert_eq!(parse_volume(""), None);
+    }
+
+    #[test]
+    fn camera_is_on_while_active_or_activating() {
+        assert!(camera_active("active\n"));
+        assert!(camera_active("activating\n"));
+        assert!(!camera_active("inactive\n"));
+        assert!(!camera_active("deactivating\n"));
+        assert!(!camera_active("failed\n"));
+        assert!(!camera_active(""));
+    }
+
+    #[test]
+    fn camera_status() {
+        let json = br#"{"state": "waiting_phone", "pc_iriun": true, "phone_connected": false,
+            "phone_iriun": false, "screen_off": true, "error": null, "updated": 1761080000}"#;
+        assert_eq!(
+            parse_camera_status(json),
+            Some(CameraStatus {
+                state: Some(CameraState::WaitingPhone),
+                pc_iriun: true,
+                phone_connected: false,
+                phone_iriun: false,
+                screen_off: true,
+                error: None,
+                pc_window: None,
+            })
+        );
+        let failed = br#"{"state": "error", "error": "PIN errado"}"#;
+        assert_eq!(
+            parse_camera_status(failed).map(|s| (s.state, s.error)),
+            Some((Some(CameraState::Error), Some("PIN errado".to_owned())))
+        );
+        for (state, expected) in [
+            ("starting", CameraState::Starting),
+            ("active", CameraState::Active),
+            ("stopped", CameraState::Stopped),
+        ] {
+            let json = format!(r#"{{"state": "{state}"}}"#);
+            assert_eq!(parse_camera_status(json.as_bytes()).and_then(|s| s.state), Some(expected));
+        }
+    }
+
+    #[test]
+    fn camera_status_missing_fields_are_off() {
+        assert_eq!(parse_camera_status(b"{}"), Some(CameraStatus::default()));
+        let unknown = br#"{"state": "dancing", "pc_iriun": true, "error": ""}"#;
+        let status = parse_camera_status(unknown).unwrap();
+        assert_eq!(status.state, None);
+        assert!(status.pc_iriun && !status.phone_connected);
+        // An empty error is no error.
+        assert_eq!(status.error, None);
+    }
+
+    #[test]
+    fn camera_status_pc_window() {
+        let window = |json: &str| parse_camera_status(json.as_bytes()).map(|s| s.pc_window);
+        assert_eq!(window(r#"{"pc_window": "hidden"}"#), Some(Some(PcWindow::Hidden)));
+        assert_eq!(window(r#"{"pc_window": "shown"}"#), Some(Some(PcWindow::Shown)));
+        // No window, or one the applet doesn't know: no button.
+        assert_eq!(window(r#"{"pc_window": null}"#), Some(None));
+        assert_eq!(window(r#"{}"#), Some(None));
+        assert_eq!(window(r#"{"pc_window": "minimized"}"#), Some(None));
+        // Nor does an odd value spoil the rest of the file.
+        assert_eq!(
+            parse_camera_status(br#"{"state": "active", "pc_window": 1}"#).map(|s| (s.state, s.pc_window)),
+            Some((Some(CameraState::Active), None))
+        );
+    }
+
+    #[test]
+    fn camera_window_settles_once_the_file_tells_it() {
+        let with = |window| Camera {
+            on: true,
+            status: Some(CameraStatus { pc_window: window, ..Default::default() }),
+        };
+        assert!(camera_window_settled(&with(Some(PcWindow::Shown)), PcWindow::Shown));
+        assert!(!camera_window_settled(&with(Some(PcWindow::Hidden)), PcWindow::Shown));
+        assert!(camera_window_settled(&with(Some(PcWindow::Hidden)), PcWindow::Hidden));
+        // No window any more: nothing to wait for.
+        assert!(camera_window_settled(&with(None), PcWindow::Shown));
+        // A file not read yet: wait.
+        assert!(!camera_window_settled(&Camera { on: true, status: None }, PcWindow::Shown));
+        assert!(camera_window_settled(&Camera::default(), PcWindow::Hidden));
+    }
+
+    #[test]
+    fn stopped_status_of_a_running_unit_is_stale() {
+        let stopped = parse_camera_status(br#"{"state": "stopped", "error": "PIN errado?"}"#);
+        assert_eq!(live_camera_status(stopped), None);
+        let active = parse_camera_status(br#"{"state": "active"}"#);
+        assert_eq!(live_camera_status(active.clone()), active);
+        assert_eq!(live_camera_status(None), None);
+    }
+
+    #[test]
+    fn broken_camera_status_is_none() {
+        assert_eq!(parse_camera_status(b""), None);
+        assert_eq!(parse_camera_status(b"{\"state\": \"active\""), None);
+        assert_eq!(parse_camera_status(b"[1, 2]"), None);
+        assert_eq!(parse_camera_status(br#"{"pc_iriun": "yes"}"#), None);
+        assert_eq!(parse_camera_status(&[0xff, 0xfe]), None);
     }
 }

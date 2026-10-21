@@ -35,6 +35,8 @@ pub enum Tile {
     Workspaces,
     Touchpad,
     HotEdge,
+    /// The phone as a webcam, through Iriun.
+    Camera,
     /// COSMIC Settings.
     Settings,
     Lock,
@@ -43,7 +45,7 @@ pub enum Tile {
 }
 
 impl Tile {
-    pub const ALL: [Tile; 21] = [
+    pub const ALL: [Tile; 22] = [
         Tile::Wifi,
         Tile::Vpn,
         Tile::Bluetooth,
@@ -62,6 +64,7 @@ impl Tile {
         Tile::Workspaces,
         Tile::Touchpad,
         Tile::HotEdge,
+        Tile::Camera,
         Tile::Settings,
         Tile::Lock,
         Tile::Session,
@@ -88,6 +91,7 @@ impl Tile {
             Tile::Workspaces => "workspaces",
             Tile::Touchpad => "touchpad",
             Tile::HotEdge => "hot-edge",
+            Tile::Camera => "camera",
             Tile::Settings => "settings",
             Tile::Lock => "lock",
             Tile::Session => "session",
@@ -99,10 +103,11 @@ impl Tile {
     }
 
     /// Whether what it needs is there to put it on: Hot Edge's only with the
-    /// extension.
+    /// extension, the camera with its service.
     pub fn available(self) -> bool {
         match self {
             Tile::HotEdge => crate::services::hot_edge_installed(),
+            Tile::Camera => crate::services::camera_installed(),
             _ => true,
         }
     }
@@ -128,6 +133,7 @@ impl Tile {
             Tile::Workspaces => t.workspaces,
             Tile::Touchpad => t.touchpad,
             Tile::HotEdge => t.hot_edge,
+            Tile::Camera => t.camera,
             Tile::Settings => t.settings,
             Tile::Lock => t.lock,
             Tile::Session => t.session,
@@ -154,6 +160,7 @@ impl Tile {
             Tile::Workspaces => "view-app-grid-symbolic",
             Tile::Touchpad => "input-touchpad-symbolic",
             Tile::HotEdge => "input-mouse-symbolic",
+            Tile::Camera => "camera-web-symbolic",
             Tile::Settings => "emblem-system-symbolic",
             Tile::Lock => "system-lock-screen-symbolic",
             Tile::Session => "system-shutdown-symbolic",
@@ -733,6 +740,24 @@ mod tests {
     #[test]
     fn other_symbols_still_come_from_the_theme() {
         assert!(!from_memory(&icon("audio-volume-high-symbolic")));
+    }
+
+    #[test]
+    fn camera_tile() {
+        assert_eq!(Tile::from_id("camera"), Some(Tile::Camera));
+        assert_eq!(Tile::Camera.id(), "camera");
+        assert_eq!(Tile::Camera.icon(), "camera-web-symbolic");
+        assert_eq!(
+            Placed::from_id("camera:short"),
+            Some(Placed { kind: Kind::Tile(Tile::Camera), fit: Fit::Short })
+        );
+    }
+
+    #[test]
+    fn every_tile_comes_back_from_its_id() {
+        for tile in Tile::ALL {
+            assert_eq!(Tile::from_id(tile.id()), Some(tile));
+        }
     }
 
     #[test]
