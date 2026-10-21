@@ -41,7 +41,7 @@ pub const WIDTH: f32 = 404.0;
 pub const MAX_HEIGHT: f32 = 800.0;
 /// Of the screen, left out of the popup's height: the panel and a little air,
 /// the popup taking the rest, as Windows' center.
-const SCREEN_MARGIN: f32 = 72.0;
+const SCREEN_MARGIN: f32 = 60.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -1866,21 +1866,22 @@ impl cosmic::Application for App {
         }
         // The clock last, as Windows 11's: the time over the date, smaller,
         // both centered.
-        if shows(BarItem::Clock) != Show::Never {
+        // Kept apart: it goes without the icons' padding, its two lines
+        // tight, to be no taller than they are and not make the bar taller.
+        let clock: Option<Element<'_, Message>> = (shows(BarItem::Clock) != Show::Never).then(|| {
             let (time, date) = if self.clock.0.is_empty() {
                 crate::calendar::bar_lines()
             } else {
                 self.clock.clone()
             };
-            icons.push(
-                widget::column::with_children(vec![
-                    widget::text::body(time).into(),
-                    widget::text::caption(date).into(),
-                ])
-                .align_x(Alignment::Center)
-                .into(),
-            );
-        }
+            let tight = iced::widget::text::LineHeight::Relative(1.05);
+            widget::column::with_children(vec![
+                widget::text::body(time).line_height(tight).into(),
+                widget::text::caption(date).line_height(tight).into(),
+            ])
+            .align_x(Alignment::Center)
+            .into()
+        });
         let icons: Element<'_, Message> = if horizontal {
             widget::row::with_children(icons)
                 .spacing(self.bar_spacing.gap())
@@ -1892,8 +1893,21 @@ impl cosmic::Application for App {
                 .align_x(Alignment::Center)
                 .into()
         };
-        let button = button::custom(icons)
-            .padding(if horizontal { [minor, major] } else { [major, minor] })
+        // The icons with the panel's padding; the clock beside them without.
+        let padded = widget::container(icons).padding(if horizontal { [minor, 0] } else { [0, minor] });
+        let content: Element<'_, Message> = match clock {
+            Some(clock) if horizontal => widget::row::with_children(vec![padded.into(), clock])
+                .spacing(self.bar_spacing.gap() + major / 2)
+                .align_y(Alignment::Center)
+                .into(),
+            Some(clock) => widget::column::with_children(vec![padded.into(), clock])
+                .spacing(self.bar_spacing.gap() + major / 2)
+                .align_x(Alignment::Center)
+                .into(),
+            None => padded.into(),
+        };
+        let button = button::custom(content)
+            .padding(if horizontal { [0, major] } else { [major, 0] })
             .class(theme::Button::AppletIcon)
             .on_press_down(Message::TogglePopup);
         applet.autosize_window(button).into()
