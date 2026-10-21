@@ -11,5 +11,4 @@ Keywords=COSMIC;Applet;Settings;Control;Quick;Central;
 Icon=io.github.Aenes0.CosmicCentral
 NoDisplay=true
 X-CosmicApplet=true
-X-NotificationsApplet=true
 X-HostWaylandDisplay=true

@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Notifications, as cosmic-notifications hands them to panel applets.
+//! Notifications, as apps send them to the daemon.
 //!
-//! The panel gives applets marked `X-NotificationsApplet` a socket to the
-//! daemon in `COSMIC_NOTIFICATIONS`; new notifications come through it. They
-//! are dismissed through the usual `org.freedesktop.Notifications`.
+//! They're seen on the session bus, as `dbus-monitor` sees them: the
+//! `Notify` calls, and the daemon's answers with their ids. Not through the
+//! socket the panel gives applets marked `X-NotificationsApplet`: when the
+//! panel can't get one from the daemon, which happens after it restarts its
+//! applets a few times, it doesn't start those applets at all, and the whole
+//! applet was gone from the bar. Dismissed and opened ones, through the usual
+//! `org.freedesktop.Notifications` signals.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -150,12 +154,97 @@ async fn daemon() -> Option<NotificationsAppletProxy<'static>> {
         .clone()
 }
 
+/// New notifications, seen on the session bus as a monitor: each `Notify`
+/// call, made whole by the daemon's answer, which gives its id. Only those
+/// calls and the daemon's answers are seen, a few messages a notification.
+async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>> {
+    let conn = Builder::session()?.build().await?;
+    zbus::fdo::MonitoringProxy::new(&conn)
+        .await?
+        .become_monitor(
+            &[
+                "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"
+                    .try_into()?,
+                "type='method_return',sender='org.freedesktop.Notifications'".try_into()?,
+            ],
+            0,
+        )
+        .await?;
+    type Notify = (
+        String,
+        u32,
+        String,
+        String,
+        String,
+        Vec<String>,
+        HashMap<String, zbus::zvariant::OwnedValue>,
+        i32,
+    );
+    // Calls waiting for their answer, by who called and the call's number.
+    let mut waiting: HashMap<(String, u32), Notification> = HashMap::new();
+    Ok(zbus::MessageStream::from(conn).filter_map(move |message| {
+        let signal = (|| {
+            let message = message.ok()?;
+            let header = message.header();
+            match header.message_type() {
+                zbus::message::Type::MethodCall => {
+                    let (app, _, icon, summary, body, actions, hints, _): Notify =
+                        message.body().deserialize().ok()?;
+                    let hint = |key: &str| {
+                        hints.get(key).and_then(|v| String::try_from(v.clone()).ok())
+                    };
+                    let notification = Notification {
+                        id: 0,
+                        icon: app_icon(
+                            &app,
+                            hint("desktop-entry").as_deref(),
+                            &icon,
+                            hint("image-path").as_deref(),
+                        ),
+                        app,
+                        summary,
+                        body: plain(&body),
+                        actions: actions
+                            .chunks(2)
+                            .filter_map(|pair| match pair {
+                                [key, label] => Some((key.clone(), label.clone())),
+                                _ => None,
+                            })
+                            .collect(),
+                        time: SystemTime::now(),
+                        restored: false,
+                    };
+                    let caller = header.sender()?.to_string();
+                    // Not answered for long: the daemon's gone, say.
+                    if waiting.len() > 64 {
+                        waiting.clear();
+                    }
+                    waiting.insert((caller, header.primary().serial_num().get()), notification);
+                    None
+                }
+                zbus::message::Type::MethodReturn => {
+                    let caller = header.destination()?.to_string();
+                    let serial = header.reply_serial()?.get();
+                    let mut notification = waiting.remove(&(caller, serial))?;
+                    notification.id = message.body().deserialize::<u32>().ok()?;
+                    Some(Signal::New(notification))
+                }
+                _ => None,
+            }
+        })();
+        async move { signal }
+    }))
+}
+
 pub fn subscription() -> Subscription<Event> {
     Subscription::run_with("notifications", |_| {
         stream::channel(50, |mut output: mpsc::Sender<Event>| async move {
-            let Some(daemon) = daemon().await else {
-                tracing::info!("no notifications socket from the panel");
-                return futures::future::pending().await;
+            let notify = match bus_notifications().await {
+                Ok(notify) => notify,
+                Err(err) => {
+                    tracing::warn!("cannot watch notifications on the bus: {err}");
+                    return futures::future::pending().await;
+                }
             };
             let Ok(session) = zbus::Connection::session().await else {
                 return futures::future::pending().await;
@@ -163,43 +252,12 @@ pub fn subscription() -> Subscription<Event> {
             let Ok(freedesktop) = NotificationsProxy::new(&session).await else {
                 return futures::future::pending().await;
             };
-            let (Ok(notify), Ok(closed), Ok(invoked)) = (
-                daemon.receive_notify().await,
+            let (Ok(closed), Ok(invoked)) = (
                 freedesktop.receive_notification_closed().await,
                 freedesktop.receive_action_invoked().await,
             ) else {
                 return futures::future::pending().await;
             };
-            let notify = notify.filter_map(|signal| async move {
-                let args = signal.args().ok()?;
-                let actions = args
-                    .actions
-                    .chunks(2)
-                    .filter_map(|pair| match pair {
-                        [key, label] => Some((key.to_string(), label.to_string())),
-                        _ => None,
-                    })
-                    .collect();
-                let hint = |key: &str| match args.hints.get(key) {
-                    Some(Value::Str(value)) => Some(value.to_string()),
-                    _ => None,
-                };
-                Some(Signal::New(Notification {
-                    id: args.id,
-                    app: args.app_name.to_owned(),
-                    icon: app_icon(
-                        args.app_name,
-                        hint("desktop-entry").as_deref(),
-                        args.app_icon,
-                        hint("image-path").as_deref(),
-                    ),
-                    summary: args.summary.to_owned(),
-                    body: plain(args.body),
-                    actions,
-                    time: SystemTime::now(),
-                    restored: false,
-                }))
-            });
             let closed = closed.filter_map(|signal| async move {
                 let args = signal.args().ok()?;
                 Some(Signal::Closed(args.id, args.reason))
