@@ -41,7 +41,7 @@ pub const WIDTH: f32 = 404.0;
 pub const MAX_HEIGHT: f32 = 800.0;
 /// Of the screen, left out of the popup's height: the panel and a little air,
 /// the popup taking the rest, as Windows' center.
-const SCREEN_MARGIN: f32 = 64.0;
+const SCREEN_MARGIN: f32 = 66.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
