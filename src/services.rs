@@ -85,9 +85,18 @@ pub struct Volume {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PowerProfiles {
+    /// Power-profiles-daemon's, or [`SUPER_SAVER`] while that's on.
     pub active: String,
+    /// With [`SUPER_SAVER`] once its helper is installed.
     pub available: Vec<String>,
 }
+
+/// Our own profile past power-saver: the CPU without boost and the GPU at its
+/// lowest power limit, by `.dev/sistema/super-economia`, which needs root.
+pub const SUPER_SAVER: &str = "super-saver";
+const SUPER_SAVER_HELPER: &str = "/usr/local/bin/super-economia";
+/// What the helper emits when it changes, as power-saver may stay put.
+const SUPER_SAVER_INTERFACE: &str = "io.github.Aenes0.SuperEconomia";
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 pub struct Sink {
@@ -134,7 +143,7 @@ impl Service {
 
     fn rules(self) -> Vec<MatchRule<'static>> {
         let name = self.name();
-        vec![
+        let mut rules = vec![
             match self {
                 // Devices come and go, too.
                 Self::Bluetooth | Self::Peripherals => signals_from(name),
@@ -144,7 +153,17 @@ impl Service {
             // comes up after the panel), or again after a crash: it says
             // nothing else then.
             owner_changed(name),
-        ]
+        ];
+        if let Self::PowerProfiles = self {
+            rules.push(
+                MatchRule::builder()
+                    .msg_type(zbus::message::Type::Signal)
+                    .interface(SUPER_SAVER_INTERFACE)
+                    .unwrap()
+                    .build(),
+            );
+        }
+        rules
     }
 
     async fn bus(self) -> zbus::Result<zbus::Connection> {
@@ -779,19 +798,55 @@ async fn power_profiles(conn: &zbus::Connection) -> zbus::Result<PowerProfiles> 
         .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await?;
-    let available = daemon
+    let mut available: Vec<String> = daemon
         .profiles()
         .await?
         .iter()
         .filter_map(|p| p.get("Profile").and_then(|v| String::try_from(v.clone()).ok()))
         .collect();
-    Ok(PowerProfiles {
-        active: daemon.active_profile().await?,
-        available,
-    })
+    let mut active = daemon.active_profile().await?;
+    if available.iter().any(|p| p == "power-saver")
+        && let Some(on) = super_saver().await
+    {
+        available.push(SUPER_SAVER.to_owned());
+        if on {
+            active = SUPER_SAVER.to_owned();
+        }
+    }
+    Ok(PowerProfiles { active, available })
+}
+
+/// Whether super saver is on; `None` without its helper.
+async fn super_saver() -> Option<bool> {
+    let output = crate::host::command(SUPER_SAVER_HELPER, &[]).arg("status").output().await.ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim() == "on")
+}
+
+/// As root, through the polkit rule that lets this user run it.
+async fn run_super_saver(on: bool) -> zbus::Result<()> {
+    let status = crate::host::command("pkexec", &[])
+        .args([SUPER_SAVER_HELPER, if on { "on" } else { "off" }])
+        .status()
+        .await
+        .map_err(|err| zbus::Error::Failure(err.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(zbus::Error::Failure(format!("super-economia: {status}")))
+    }
 }
 
 pub async fn set_power_profile(profile: String) -> zbus::Result<()> {
+    if profile == SUPER_SAVER {
+        // It sets power-saver itself.
+        return run_super_saver(true).await;
+    }
+    if super_saver().await == Some(true) {
+        run_super_saver(false).await?;
+    }
     let conn = zbus::Connection::system().await?;
     PowerProfilesDaemonProxy::new(&conn)
         .await?

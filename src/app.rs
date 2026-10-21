@@ -1051,7 +1051,7 @@ impl cosmic::Application for App {
             }
             Message::NextPowerProfile => {
                 if let Some(power) = &self.power {
-                    let order = ["power-saver", "balanced", "performance"];
+                    let order = [services::SUPER_SAVER, "power-saver", "balanced", "performance"];
                     let available: Vec<&str> = order
                         .into_iter()
                         .filter(|p| power.available.iter().any(|a| a == p))

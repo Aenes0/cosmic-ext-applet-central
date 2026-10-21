@@ -78,7 +78,13 @@ o Configurações no rodapé:
 - **Bluetooth**: liga/desliga e lista os dispositivos pareados, com a bateria dos
   conectados; clicar conecta ou desconecta.
 - **Energia**: a bateria do computador e de cada periférico, a opção de mostrar a
-  porcentagem da bateria do computador na barra, e os três modos.
+  porcentagem da bateria do computador na barra, e os três modos, mais a **Super
+  economia**: o modo Economia com a CPU sem boost e a GPU no menor limite de consumo que o
+  driver aceita (NVIDIA, com o clock travado em até 1000 MHz e a memória em até 810 MHz, que com vários
+  monitores o driver deixa no máximo; AMD, no nível mais baixo).
+  Mexer nisso precisa do root: `sudo .dev/sistema/super-economia.sh` instala uma vez um
+  ajudante em `/usr/local/bin`, uma regra do polkit que deixa só o seu usuário rodá-lo sem
+  senha e um serviço que a liga de novo no boot se estava ligada (`… remover` desfaz tudo).
 - **Som** (seta do volume): a saída de áudio (as portas sem nada ligado, como HDMI sem
   monitor, ficam de fora), o volume de cada app que está tocando, como no mixer do Windows
   (o ícone do app, dentro do slider, o deixa mudo), e a entrada: volume do microfone e qual

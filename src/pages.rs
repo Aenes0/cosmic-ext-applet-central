@@ -24,6 +24,9 @@ use crate::{
     },
 };
 
+/// Power-saver's leaf, filled.
+const SUPER_SAVER_ICON: &str = "emoji-nature-symbolic";
+
 /// A row of a page: icon, title, maybe a subtitle, maybe something at the end.
 fn item<'a>(
     icon_name: &str,
@@ -566,12 +569,20 @@ impl App {
         }
         if let Some(power) = &self.power {
             let profiles = [
+                (services::SUPER_SAVER, SUPER_SAVER_ICON, t.super_saver, t.super_saver_about),
                 ("power-saver", "power-profile-power-saver-symbolic", t.power_saver, t.power_saver_about),
                 ("balanced", "power-profile-balanced-symbolic", t.balanced, t.balanced_about),
                 ("performance", "power-profile-performance-symbolic", t.performance, t.performance_about),
             ];
             for (id, icon_name, name, about) in profiles {
                 if !power.available.iter().any(|p| p == id) {
+                    // Shown, with how to install its helper.
+                    if id == services::SUPER_SAVER
+                        && power.available.iter().any(|p| p == "power-saver")
+                    {
+                        let hint = Some(t.super_saver_hint.to_owned());
+                        body.push(item(icon_name, name.to_owned(), hint, None).into());
+                    }
                     continue;
                 }
                 let active = power.active == id;
@@ -1769,6 +1780,7 @@ impl App {
             Tile::Power => {
                 let power = self.power.as_ref().filter(|p| p.available.len() > 1)?;
                 let (icon_name, name) = match power.active.as_str() {
+                    services::SUPER_SAVER => (SUPER_SAVER_ICON, t.super_saver),
                     "power-saver" => ("power-profile-power-saver-symbolic", t.power_saver),
                     "performance" => ("power-profile-performance-symbolic", t.performance),
                     _ => ("power-profile-balanced-symbolic", t.balanced),
