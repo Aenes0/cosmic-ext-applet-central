@@ -19,6 +19,7 @@ mod show_desktop;
 mod texts;
 mod tiles;
 mod transition;
+mod tray;
 mod widgets;
 mod workspaces;
 
@@ -33,6 +34,9 @@ fn main() -> cosmic::iced::Result {
     }
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        // A write that fails is dropped: told on stderr, if that is what
+        // failed, it would abort the program.
+        .log_internal_errors(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "warn,cosmic_ext_applet_central=info".into()),
@@ -45,6 +49,10 @@ fn main() -> cosmic::iced::Result {
     // And the system monitor, at the bar's other end.
     if std::env::args().any(|arg| arg == "--monitor") {
         return cosmic::applet::run::<monitor::Monitor>(());
+    }
+    // And the tray of background apps.
+    if std::env::args().any(|arg| arg == "--tray") {
+        return tray::run();
     }
     cosmic::applet::run::<app::App>(())
 }

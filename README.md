@@ -166,6 +166,25 @@ processos, só enquanto o painel deles está aberto.
 | GPU NVIDIA | a biblioteca do driver (`libnvidia-ml.so`), sem rodar o `nvidia-smi` |
 | GPU AMD | `/sys/class/drm` |
 
+## Bandeja
+
+Um applet opcional do mesmo programa (`--tray`), para perto do relógio: a bandeja dos apps
+em segundo plano (os ícones de StatusNotifierItem) como a do Windows 11. Os escolhidos ficam
+na barra, na ordem escolhida; os outros vão para uma caixa que abre pela ^, em linhas de até
+cinco, com o nome de cada um ao passar o mouse. A ^ some quando não há nenhum escondido. O
+clique esquerdo ativa o app e o direito abre o menu dele, na barra e na caixa.
+
+Quem fica onde se escolhe arrastando: da caixa para a barra mostra, na posição em que soltar;
+para a ^ esconde; ao longo da barra muda a ordem. Durante o arrasto, abre um espaço onde o
+ícone vai cair, e com tudo visível a ^ aparece como alvo. Um app novo começa escondido. A
+lista dos visíveis fica na configuração do COSMIC (`io.github.Aenes0.CosmicTray`, a mesma de
+quando a bandeja era um programa à parte) e vale para o painel de todos os monitores.
+
+É um fork do `cosmic-applet-status-area` do COSMIC, e os ícones continuam vindo do serviço
+do sistema (`com.system76.CosmicStatusNotifierWatcher`, do pacote `cosmic-applets`). Para
+usá-la, adicione **Bandeja** em Configurações › Área de trabalho › Painel › Applets, no
+lugar da bandeja do COSMIC.
+
 ## Menu Iniciar
 
 O menu Iniciar no estilo do Windows 11, que começou aqui, virou um applet à parte:

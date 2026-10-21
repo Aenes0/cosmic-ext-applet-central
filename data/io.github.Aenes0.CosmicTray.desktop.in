@@ -1,0 +1,16 @@
+[Desktop Entry]
+Name=Tray
+Name[pt_BR]=Bandeja
+Comment=Background apps as on Windows 11: choose by dragging which show on the panel
+Comment[pt_BR]=Apps em segundo plano como no Windows 11: arraste para escolher quais aparecem no painel
+Type=Application
+Exec=@bindir@/cosmic-ext-applet-central --tray
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;App;Indicator;Notification;Tray;Status;Bandeja;
+Icon=com.system76.CosmicAppletStatusArea
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=99
+X-OverflowMinSize=2
