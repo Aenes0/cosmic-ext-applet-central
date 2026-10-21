@@ -93,6 +93,18 @@ fn text(metadata: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
         .or_else(|| Vec::<String>::try_from(value.clone()).ok().map(|v| v.join(", ")))
 }
 
+/// A cover's side, as kept: twice the largest it is shown (56), so it
+/// stays sharp. At full size, decoding it again each time its card is drawn
+/// would cost far more than showing it.
+const COVER_SIDE: u32 = 112;
+
+/// The square in a picture's middle, made small.
+fn square_cover(image: &image::DynamicImage) -> image::DynamicImage {
+    let side = image.width().min(image.height());
+    let square = image.crop_imm((image.width() - side) / 2, (image.height() - side) / 2, side, side);
+    if side > COVER_SIDE { square.thumbnail(COVER_SIDE, COVER_SIDE) } else { square }
+}
+
 /// A square local copy of the cover: players give a `file://` path or a web
 /// address, and browsers a video's wide thumbnail, the art in its middle.
 async fn cover(url: &str) -> Option<PathBuf> {
@@ -112,7 +124,8 @@ async fn cover(url: &str) -> Option<PathBuf> {
         crate::host::modified(path).await?.hash(&mut hasher);
     }
     let name = format!("{:016x}", hasher.finish());
-    let square = dir.join(format!("{name}.png"));
+    // The side in the name: those kept at full size, before, are made again.
+    let square = dir.join(format!("{name}-{COVER_SIDE}.png"));
     if square.exists() {
         return Some(square);
     }
@@ -134,11 +147,7 @@ async fn cover(url: &str) -> Option<PathBuf> {
     let saved = square.clone();
     let cropped = tokio::task::spawn_blocking(move || {
         // Browsers save it without an extension: tell the format by its bytes.
-        let image = image::load_from_memory(&bytes)?;
-        let side = image.width().min(image.height());
-        image
-            .crop_imm((image.width() - side) / 2, (image.height() - side) / 2, side, side)
-            .save(&saved)?;
+        square_cover(&image::load_from_memory(&bytes)?).save(&saved)?;
         Ok::<(), image::ImageError>(())
     })
     .await;
@@ -335,4 +344,23 @@ pub async fn seek(service: String, track: OwnedObjectPath, position: i64) -> zbu
         .await?
         .set_position(&track, position)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wide_thumbnail_becomes_a_small_square_from_its_middle() {
+        let wide = image::DynamicImage::new_rgb8(1280, 720);
+        let cover = square_cover(&wide);
+        assert_eq!((cover.width(), cover.height()), (COVER_SIDE, COVER_SIDE));
+    }
+
+    #[test]
+    fn a_small_cover_is_not_blown_up() {
+        let small = image::DynamicImage::new_rgb8(84, 100);
+        let cover = square_cover(&small);
+        assert_eq!((cover.width(), cover.height()), (84, 84));
+    }
 }

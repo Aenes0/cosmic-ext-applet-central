@@ -221,6 +221,9 @@ struct SurfaceState {
     lit: Ease,
     pressed: Ease,
     is_pressed: bool,
+    /// Lit by the cursor, as last drawn: redrawn only when that changes,
+    /// not at every move of the mouse.
+    hovered: bool,
 }
 
 impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Surface<'_, Message> {
@@ -233,6 +236,7 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Surfac
             lit: Ease::at(if self.on { 1.0 } else { 0.0 }),
             pressed: Ease::at(0.0),
             is_pressed: false,
+            hovered: false,
         })
     }
 
@@ -319,7 +323,13 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Surfac
                     shell.capture_event();
                 }
             }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) => shell.request_redraw(),
+            Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) => {
+                let hovered = over && self.on_press.is_some();
+                if hovered != state.hovered {
+                    state.hovered = hovered;
+                    shell.request_redraw();
+                }
+            }
             _ => {}
         }
     }
@@ -590,6 +600,9 @@ struct LevelState {
     dragging: bool,
     /// Pressed on the icon, not moved yet: a click on it.
     on_icon: Option<Point>,
+    /// Over it and over its icon, as last drawn: redrawn only when that
+    /// changes.
+    hover: (bool, bool),
 }
 
 /// Moving this far from a press on the icon makes it a drag.
@@ -688,7 +701,17 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
                     set(shell, *position);
                     shell.capture_event();
                 }
-                shell.request_redraw();
+                let hover = (cursor.is_over(bounds), cursor.position_over(self.icon_bounds(bounds)).is_some());
+                if hover != state.hover {
+                    state.hover = hover;
+                    shell.request_redraw();
+                }
+            }
+            Event::Mouse(mouse::Event::CursorLeft) => {
+                if state.hover != (false, false) {
+                    state.hover = (false, false);
+                    shell.request_redraw();
+                }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if state.on_icon.take().is_some() {
@@ -973,6 +996,8 @@ impl<'a, Message> Handle<'a, Message> {
 struct HandleState {
     /// Where it was pressed, while dragged.
     from: Option<f32>,
+    /// Under the cursor, as last drawn.
+    hovered: bool,
 }
 
 /// The handle's size: thin and tall, with room around it to catch.
@@ -1023,6 +1048,16 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Handle
                 if let Some(from) = state.from {
                     shell.publish((self.on_drag)(position.x - from));
                     shell.capture_event();
+                }
+                let hovered = cursor.is_over(layout.bounds());
+                if hovered != state.hovered {
+                    state.hovered = hovered;
+                    shell.request_redraw();
+                }
+            }
+            Event::Mouse(mouse::Event::CursorLeft) => {
+                if std::mem::take(&mut state.hovered) {
+                    shell.request_redraw();
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {

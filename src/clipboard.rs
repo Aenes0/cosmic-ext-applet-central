@@ -15,7 +15,7 @@ use std::{
         fd::{AsFd, OwnedFd},
         unix::net::UnixStream,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
@@ -88,6 +88,62 @@ fn dir() -> PathBuf {
     state.join(crate::APP_ID)
 }
 
+/// A picture's thumbnail, next to it: twice as tall as its card, so it
+/// stays sharp. Decoding the picture itself, at full size, each time the
+/// card is drawn again took a fifth of a second.
+const THUMB_HEIGHT: u32 = 96;
+
+fn thumbnail_path(image: &Path) -> PathBuf {
+    image.with_extension("thumb.png")
+}
+
+/// Makes a picture's thumbnail, unless there is one. Written aside and moved
+/// in place: each screen's applet may make it at once.
+fn make_thumbnail(image: &Path) {
+    let thumb = thumbnail_path(image);
+    if thumb.exists() {
+        return;
+    }
+    let Ok(picture) = image::open(image) else {
+        return;
+    };
+    let small = if picture.height() > THUMB_HEIGHT {
+        picture.thumbnail(u32::MAX, THUMB_HEIGHT)
+    } else {
+        picture
+    };
+    let tmp = thumb.with_extension(format!("{}.tmp", std::process::id()));
+    if small.save_with_format(&tmp, image::ImageFormat::Png).is_ok() {
+        _ = std::fs::rename(&tmp, &thumb);
+    } else {
+        _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// What a card shows of a picture: its thumbnail, or itself while there is
+/// none yet.
+pub fn shown(image: &Path) -> PathBuf {
+    let thumb = thumbnail_path(image);
+    if thumb.exists() { thumb } else { image.to_owned() }
+}
+
+/// The thumbnails the pictures copied before there were any lack, made
+/// away from the screen.
+pub fn make_missing_thumbnails() {
+    std::thread::spawn(|| {
+        for entry in load() {
+            if let Some(image) = &entry.image {
+                make_thumbnail(image);
+            }
+        }
+    });
+}
+
+fn remove_image(image: &Path) {
+    _ = std::fs::remove_file(image);
+    _ = std::fs::remove_file(thumbnail_path(image));
+}
+
 fn file() -> PathBuf {
     dir().join("clipboard.json")
 }
@@ -124,7 +180,7 @@ pub fn change(f: impl FnOnce(&mut Vec<Entry>)) -> Vec<Entry> {
         unpinned += 1;
         let keep = unpinned <= KEEP;
         if !keep && let Some(image) = &entry.image {
-            _ = std::fs::remove_file(image);
+            remove_image(image);
         }
         keep
     });
@@ -156,7 +212,7 @@ pub fn remove(id: u64) -> Vec<Entry> {
         if let Some(entry) = entries.iter().find(|e| e.id == id)
             && let Some(image) = &entry.image
         {
-            _ = std::fs::remove_file(image);
+            remove_image(image);
         }
         entries.retain(|e| e.id != id);
     })
@@ -167,7 +223,7 @@ pub fn clear() -> Vec<Entry> {
     change(|entries| {
         for entry in entries.iter().filter(|e| !e.pinned) {
             if let Some(image) = &entry.image {
-                _ = std::fs::remove_file(image);
+                remove_image(image);
             }
         }
         entries.retain(|e| e.pinned);
@@ -196,6 +252,7 @@ fn record(mime: &str, bytes: Vec<u8>) -> Vec<Entry> {
             if std::fs::write(&path, &bytes).is_err() {
                 return;
             }
+            make_thumbnail(&path);
             entry.image = Some(path);
         } else {
             let Ok(text) = String::from_utf8(bytes) else {
@@ -612,7 +669,7 @@ impl App {
                 .width(Length::Fill)
                 .into(),
             (None, Some(path)) => widget::row::with_children(vec![
-                widget::image(widget::image::Handle::from_path(path))
+                widget::image(widget::image::Handle::from_path(shown(path)))
                     .height(Length::Fixed(48.0))
                     .content_fit(cosmic::iced::ContentFit::Contain)
                     .border_radius(6.0)
@@ -655,5 +712,71 @@ impl App {
             .class(crate::tiles::edit_class(false))
             .on_press(Message::CopyEntry(entry.id))
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("central-clipboard-{name}-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn png(path: &Path, width: u32, height: u32) {
+        image::RgbImage::new(width, height).save(path).unwrap();
+    }
+
+    #[test]
+    fn a_thumbnail_is_as_tall_as_twice_the_card_and_keeps_the_shape() {
+        let dir = scratch("thumb");
+        let image = dir.join("1.png");
+        png(&image, 1677, 919);
+
+        make_thumbnail(&image);
+
+        let thumb = image::open(thumbnail_path(&image)).unwrap();
+        assert_eq!(thumb.height(), THUMB_HEIGHT);
+        assert_eq!(thumb.width(), 175);
+    }
+
+    #[test]
+    fn a_small_picture_is_not_blown_up() {
+        let dir = scratch("small");
+        let image = dir.join("1.png");
+        png(&image, 40, 20);
+
+        make_thumbnail(&image);
+
+        let thumb = image::open(thumbnail_path(&image)).unwrap();
+        assert_eq!((thumb.width(), thumb.height()), (40, 20));
+    }
+
+    #[test]
+    fn shown_is_the_thumbnail_when_there_is_one_else_the_picture() {
+        let dir = scratch("shown");
+        let image = dir.join("1.png");
+        png(&image, 300, 200);
+        assert_eq!(shown(&image), image);
+
+        make_thumbnail(&image);
+
+        assert_eq!(shown(&image), thumbnail_path(&image));
+    }
+
+    #[test]
+    fn removing_a_picture_takes_its_thumbnail_too() {
+        let dir = scratch("remove");
+        let image = dir.join("1.png");
+        png(&image, 300, 200);
+        make_thumbnail(&image);
+
+        remove_image(&image);
+
+        assert!(!image.exists());
+        assert!(!thumbnail_path(&image).exists());
     }
 }

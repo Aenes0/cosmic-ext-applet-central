@@ -649,6 +649,7 @@ impl cosmic::Application for App {
     const APP_ID: &'static str = crate::APP_ID;
 
     fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
+        crate::clipboard::make_missing_thumbnails();
         let tiles = load_tiles();
         // COSMIC_QS_PREVIEW_SELECT=4 picks that item while editing, to see
         // its sizes and handle.
