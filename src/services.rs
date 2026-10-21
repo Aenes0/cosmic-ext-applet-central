@@ -926,7 +926,14 @@ pub(crate) fn pactl_events() -> tokio::sync::broadcast::Receiver<String> {
                 {
                     let mut lines = tokio::io::BufReader::new(stdout).lines();
                     while let Ok(Some(line)) = lines.next_line().await {
-                        _ = sender.send(line);
+                        // Each pactl and wpctl run, ours too, comes and goes
+                        // as a client: passed on, they filled the channel,
+                        // whose lagging reads again with more of them, and
+                        // three applets kept each other at it, hundreds a
+                        // second.
+                        if !line.contains(" on client") {
+                            _ = sender.send(line);
+                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
