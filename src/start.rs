@@ -5,6 +5,7 @@
 //! top, already focused; the pinned apps, the open windows, the recommended
 //! (apps just installed or used, files just changed) and all the apps, by
 //! category, in a grid or a list; the user and the power button at the foot.
+//! It shows at once, without rising from the panel.
 //!
 //! Its own program, the same binary run with `--start`, a layer surface
 //! over the screen, not an applet's popup: so the Super key, a shortcut,
@@ -58,7 +59,7 @@ use cosmic::{
             },
         },
         stream,
-        widget::{scrollable, text::Wrapping},
+        widget::text::Wrapping,
         window,
     },
     theme,
@@ -71,19 +72,17 @@ pub const APP_ID: &str = "io.github.Aenes0.CosmicCentral.Start";
 const BUS_NAME: &str = "io.github.Aenes0.CosmicCentral.Start";
 const BUS_PATH: &str = "/io/github/Aenes0/CosmicCentral/Start";
 
-const WIDTH: f32 = 760.0;
-const HEIGHT: f32 = 800.0;
+const WIDTH: f32 = 874.0;
+const HEIGHT: f32 = 920.0;
 /// Room around the menu for its shadow.
 const MARGIN: f32 = 16.0;
-const SIDE: u16 = 40;
+const SIDE: u16 = 46;
 const FOOTER: f32 = 64.0;
 const PINNED_COLUMNS: usize = 8;
 const PINNED_ROWS: usize = 2;
 const CARD_COLUMNS: usize = 3;
 const CARD_ROWS: usize = 2;
 const CATEGORY_COLUMNS: usize = 4;
-/// How long it takes to rise from the panel.
-const OPENING: Duration = Duration::from_millis(220);
 
 static SEARCH: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("start-search"));
 static HOME: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("start-home"));
@@ -183,7 +182,6 @@ pub enum Message {
     Escape,
     Focus,
     Focused,
-    Frame,
     Resized(f32),
     Apps(Arc<Vec<AppEntry>>),
     Recents(Vec<RecentFile>),
@@ -340,7 +338,6 @@ impl cosmic::Application for StartMenu {
                     return text_input::focus(SEARCH.clone());
                 }
             }
-            Message::Frame => {}
             Message::Resized(height) => self.room = height,
             Message::Apps(apps) => {
                 self.apps = apps;
@@ -433,7 +430,7 @@ impl cosmic::Application for StartMenu {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subscriptions = vec![
+        Subscription::batch([
             dbus_service(),
             windows_subscription(),
             event::listen_with(|event, status, _| match event {
@@ -459,12 +456,7 @@ impl cosmic::Application for StartMenu {
                 },
                 _ => None,
             }),
-        ];
-        // A frame at a time while it rises.
-        if self.surface.is_some() && self.shown_at.elapsed() < OPENING + Duration::from_millis(50) {
-            subscriptions.push(window::frames().map(|_| Message::Frame));
-        }
-        Subscription::batch(subscriptions)
+        ])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -524,23 +516,6 @@ impl cosmic::Application for StartMenu {
         // Clicks on the menu stay there; anywhere else, they close it.
         let menu = widget::mouse_area(menu).on_press(Message::Nothing);
 
-        // It rises from the panel, as on Windows: its top shows first and
-        // the rest follows, as through a slot at the panel's edge.
-        let t = (self.shown_at.elapsed().as_secs_f32() / OPENING.as_secs_f32()).min(1.0);
-        let eased = 1.0 - (1.0 - t).powi(3);
-        let full = height + 2.0 * MARGIN;
-        let mut slot = widget::scrollable(widget::container(menu).padding(MARGIN))
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new().width(0.0).scroller_width(0.0),
-            ))
-            .height(Length::Fill);
-        if self.on_top {
-            slot = slot.anchor_bottom();
-        }
-        let slot = widget::container(slot)
-            .width(Length::Fixed(WIDTH + 2.0 * MARGIN))
-            .height(Length::Fixed((full * eased).max(1.0)))
-            .clip(true);
 
         let backdrop = widget::mouse_area(
             widget::container(widget::space::horizontal())
@@ -549,7 +524,8 @@ impl cosmic::Application for StartMenu {
         )
         .on_press(Message::Hide)
         .on_right_press(Message::Hide);
-        let placed = widget::container(slot)
+        let placed = widget::container(menu)
+            .padding(MARGIN)
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -832,8 +808,8 @@ impl StartMenu {
     /// An app as the grid has it: the icon, and the name under it.
     fn app_tile<'a>(&'a self, app: &'a AppEntry, p: Palette) -> Element<'a, Message> {
         let content = widget::column::with_children(vec![
-            widget::icon(app.icon.clone()).size(32).into(),
-            widget::text::caption(ellipsize(&app.name, 12))
+            widget::icon(app.icon.clone()).size(36).into(),
+            widget::text::caption(ellipsize(&app.name, 13))
                 .width(Length::Fill)
                 .align_x(Alignment::Center)
                 .wrapping(Wrapping::None)
@@ -844,7 +820,7 @@ impl StartMenu {
         .width(Length::Fill);
         widget::mouse_area(
             button::custom(content)
-                .padding([12, 0, 6, 0])
+                .padding([14, 0, 8, 0])
                 .width(Length::Fill)
                 .class(flat_class(p, false))
                 .on_press(Message::Launch(app.id.clone())),
@@ -854,9 +830,9 @@ impl StartMenu {
     }
 
     fn tile_grid<'a>(&'a self, apps: &[&'a AppEntry], columns: usize, p: Palette) -> Element<'a, Message> {
-        let mut grid = widget::column::with_capacity(apps.len() / columns + 1).spacing(4);
+        let mut grid = widget::column::with_capacity(apps.len() / columns + 1).spacing(12);
         for chunk in apps.chunks(columns) {
-            let mut row = widget::row::with_capacity(columns).spacing(2);
+            let mut row = widget::row::with_capacity(columns).spacing(12);
             for app in chunk {
                 row = row.push(self.app_tile(app, p));
             }
@@ -879,7 +855,7 @@ impl StartMenu {
         p: Palette,
     ) -> Element<'a, Message> {
         let text = widget::column::with_children(vec![
-            widget::text::body(ellipsize(&title, 22)).size(13).wrapping(Wrapping::None).into(),
+            widget::text::body(ellipsize(&title, 25)).size(13).wrapping(Wrapping::None).into(),
             widget::text::caption(ellipsize(&subtitle, 28))
                 .class(theme::Text::Color(p.dim))
                 .wrapping(Wrapping::None)
@@ -887,7 +863,7 @@ impl StartMenu {
         ])
         .spacing(1);
         let content = widget::row::with_children(vec![
-            widget::icon(icon).size(32).into(),
+            widget::icon(icon).size(36).into(),
             widget::container(text).width(Length::Fill).clip(true).into(),
         ])
         .spacing(12)
@@ -905,9 +881,9 @@ impl StartMenu {
 
     fn card_grid<'a>(cards: Vec<Element<'a, Message>>) -> Element<'a, Message> {
         let mut cards = cards.into_iter().peekable();
-        let mut grid = widget::column::with_capacity(4).spacing(4);
+        let mut grid = widget::column::with_capacity(4).spacing(8);
         while cards.peek().is_some() {
-            let mut row = widget::row::with_capacity(CARD_COLUMNS).spacing(8);
+            let mut row = widget::row::with_capacity(CARD_COLUMNS).spacing(16);
             for _ in 0..CARD_COLUMNS {
                 row = row.push(match cards.next() {
                     Some(card) => card,
@@ -1082,13 +1058,13 @@ impl StartMenu {
                 }
             };
             let icons = widget::column::with_children(vec![
-                widget::row::with_children(vec![icon(0), icon(1)]).spacing(20).into(),
-                widget::row::with_children(vec![icon(2), icon(3)]).spacing(20).into(),
+                widget::row::with_children(vec![icon(0), icon(1)]).spacing(28).into(),
+                widget::row::with_children(vec![icon(2), icon(3)]).spacing(28).into(),
             ])
-            .spacing(16);
+            .spacing(22);
             let card = button::custom(widget::container(icons).center(Length::Fill))
                 .width(Length::Fill)
-                .height(Length::Fixed(124.0))
+                .height(Length::Fixed(144.0))
                 .class(folder_class(p))
                 .on_press(Message::Menu(Some(Target::Category(category))));
             folders.push(
@@ -1107,7 +1083,7 @@ impl StartMenu {
         let mut folders = folders.into_iter().peekable();
         let mut grid = widget::column::with_capacity(3).spacing(16);
         while folders.peek().is_some() {
-            let mut row = widget::row::with_capacity(CATEGORY_COLUMNS).spacing(12);
+            let mut row = widget::row::with_capacity(CATEGORY_COLUMNS).spacing(16);
             for _ in 0..CATEGORY_COLUMNS {
                 row = row.push(match folders.next() {
                     Some(folder) => folder,
@@ -1449,7 +1425,7 @@ impl StartMenu {
             Target::Category(category) => {
                 title = t.categories.get(*category).map(|n| (*n).to_owned());
                 let apps: Vec<&AppEntry> = self.apps.iter().filter(|a| a.category == *category).collect();
-                width = 520.0;
+                width = 600.0;
                 items.push(
                     widget::container(
                         widget::scrollable(self.tile_grid(&apps, 5, p)).height(Length::Shrink),
