@@ -92,7 +92,8 @@ pub struct PowerProfiles {
 }
 
 /// Our own profile past power-saver: the CPU without boost and the GPU at its
-/// lowest power limit, by `.dev/sistema/super-economia`, which needs root.
+/// lowest power limit, by the `super-economia` helper
+/// (github.com/Aenes0/super-economia), which needs root.
 pub const SUPER_SAVER: &str = "super-saver";
 const SUPER_SAVER_HELPER: &str = "/usr/local/bin/super-economia";
 /// What the helper emits when it changes, as power-saver may stay put.

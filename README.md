@@ -82,7 +82,7 @@ o Configurações no rodapé:
   economia**: o modo Economia com a CPU sem boost e a GPU no menor limite de consumo que o
   driver aceita (NVIDIA, com o clock travado em até 1000 MHz e a memória em até 810 MHz, que com vários
   monitores o driver deixa no máximo; AMD, no nível mais baixo).
-  Mexer nisso precisa do root: `sudo .dev/sistema/super-economia.sh` instala uma vez um
+  Mexer nisso precisa do root: o `super-economia.sh` do [super-economia](https://github.com/Aenes0/super-economia) instala uma vez um
   ajudante em `/usr/local/bin`, uma regra do polkit que deixa só o seu usuário rodá-lo sem
   senha e um serviço que a liga de novo no boot se estava ligada (`… remover` desfaz tudo).
 - **Som** (seta do volume): a saída de áudio (as portas sem nada ligado, como HDMI sem
@@ -162,7 +162,7 @@ processos, só enquanto o painel deles está aberto.
 | --- | --- |
 | CPU, memória, discos, rede, processos | `/proc` |
 | Temperaturas, ventoinhas | `/sys/class/hwmon` |
-| Consumo da CPU | RAPL (`/sys/class/powercap`); só o root lê por padrão, por causa do [PLATYPUS](https://platypusattack.com): `sudo .dev/sistema/permitir-rapl.sh` libera só para o grupo do seu usuário, na hora |
+| Consumo da CPU | RAPL (`/sys/class/powercap`); só o root lê por padrão, por causa do [PLATYPUS](https://platypusattack.com): o `permitir-rapl.sh` do [super-economia](https://github.com/Aenes0/super-economia) libera só para o grupo do seu usuário, na hora |
 | GPU NVIDIA | a biblioteca do driver (`libnvidia-ml.so`), sem rodar o `nvidia-smi` |
 | GPU AMD | `/sys/class/drm` |
 
