@@ -47,7 +47,10 @@ use cosmic::{
 use serde::{Deserialize, Serialize};
 
 /// Kept at most, besides the pinned.
-const KEEP: usize = 50;
+const KEEP: usize = 15;
+/// What a card shows of a text, at most: laying out the whole of each (64 KB
+/// in all, once) took ~25 ms each time the panel came back.
+const PREVIEW_CHARS: usize = 200;
 /// Bigger than this isn't kept.
 const LARGEST: usize = 16 * 1024 * 1024;
 
@@ -131,7 +134,8 @@ pub fn shown(image: &Path) -> PathBuf {
 /// away from the screen.
 pub fn make_missing_thumbnails() {
     std::thread::spawn(|| {
-        for entry in load() {
+        // A history kept longer before is cut down to what's kept now.
+        for entry in change(|_| {}) {
             if let Some(image) = &entry.image {
                 make_thumbnail(image);
             }
@@ -171,8 +175,18 @@ fn save(entries: &[Entry]) {
 pub fn change(f: impl FnOnce(&mut Vec<Entry>)) -> Vec<Entry> {
     let mut entries = load();
     f(&mut entries);
-    // The pinned kept, the rest the newest ones only; their pictures too.
+    for image in prune(&mut entries) {
+        remove_image(&image);
+    }
+    save(&entries);
+    entries
+}
+
+/// The pinned kept, the rest the newest ones only; the pictures of those
+/// left out, to remove.
+fn prune(entries: &mut Vec<Entry>) -> Vec<PathBuf> {
     let mut unpinned = 0;
+    let mut dropped = Vec::new();
     entries.retain(|entry| {
         if entry.pinned {
             return true;
@@ -180,12 +194,16 @@ pub fn change(f: impl FnOnce(&mut Vec<Entry>)) -> Vec<Entry> {
         unpinned += 1;
         let keep = unpinned <= KEEP;
         if !keep && let Some(image) = &entry.image {
-            remove_image(image);
+            dropped.push(image.clone());
         }
         keep
     });
-    save(&entries);
-    entries
+    dropped
+}
+
+/// What a card shows of a text: its start, on one line.
+fn preview(text: &str) -> String {
+    text.trim().chars().take(PREVIEW_CHARS).collect::<String>().replace('\n', " ⏎ ")
 }
 
 /// Copied again from the history: up to the top.
@@ -662,7 +680,7 @@ impl App {
         let t = texts();
         let spacing = theme::spacing();
         let content: Element<'_, Message> = match (&entry.text, &entry.image) {
-            (Some(text), _) => widget::text::body(text.trim().replace('\n', " ⏎ "))
+            (Some(text), _) => widget::text::body(preview(text))
                 .ellipsize(cosmic::iced::core::text::Ellipsize::End(
                     cosmic::iced::core::text::EllipsizeHeightLimit::Lines(2),
                 ))
@@ -765,6 +783,32 @@ mod tests {
         make_thumbnail(&image);
 
         assert_eq!(shown(&image), thumbnail_path(&image));
+    }
+
+    fn entry(id: u64, pinned: bool) -> Entry {
+        Entry { id, text: Some(format!("{id}")), image: None, pinned, time: 0 }
+    }
+
+    #[test]
+    fn the_history_keeps_fifteen_besides_the_pinned() {
+        let mut entries: Vec<Entry> = (0..20).map(|id| entry(id, id == 18)).collect();
+
+        prune(&mut entries);
+
+        let ids: Vec<u64> = entries.iter().map(|e| e.id).collect();
+        assert_eq!(ids, (0..15).chain([18]).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_long_text_is_cut_before_it_is_laid_out() {
+        let text = "a".repeat(64 * 1024);
+
+        assert_eq!(preview(&text).chars().count(), PREVIEW_CHARS);
+    }
+
+    #[test]
+    fn a_short_text_shows_whole_with_its_lines_marked() {
+        assert_eq!(preview("  one\ntwo  "), "one ⏎ two");
     }
 
     #[test]
