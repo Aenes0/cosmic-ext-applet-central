@@ -522,10 +522,22 @@ pub fn edit_class(selected: bool) -> theme::Button {
     }
 }
 
+/// Symbols drawn here, not taken from the theme: Breeze's power symbol is a
+/// 1 px ring cut square, drawn for 16 px, that blurs at other sizes, and its
+/// gear has a "play" triangle inside (a service, in KDE). Ours are thin as
+/// Windows', rounded.
+const OWN_SYMBOLS: &[(&str, &[u8])] = &[
+    ("system-shutdown-symbolic", include_bytes!("../assets/icons/power-symbolic.svg")),
+    ("emblem-system-symbolic", include_bytes!("../assets/icons/settings-symbolic.svg")),
+];
+
 /// A symbolic icon by name. COSMIC's icon theme lacks some GNOME names, like
 /// the power profiles'; those come from Adwaita's files.
 pub fn icon(name: &str) -> widget::icon::Handle {
     use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+    if let Some((_, svg)) = OWN_SYMBOLS.iter().find(|(own, _)| *own == name) {
+        return widget::icon::from_svg_bytes(*svg).symbolic(true);
+    }
     static FOUND: Mutex<Option<HashMap<String, Option<PathBuf>>>> = Mutex::new(None);
 
     // The system's icons, and in a Flatpak sandbox where it shows them.
@@ -698,6 +710,30 @@ fn tile_class(on: bool) -> theme::Button {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn from_memory(handle: &widget::icon::Handle) -> bool {
+        matches!(&handle.data, widget::icon::Data::Svg(svg)
+            if matches!(svg.data(), cosmic::iced::core::svg::Data::Bytes(_)))
+    }
+
+    #[test]
+    fn the_power_symbol_is_ours_not_the_themes() {
+        let handle = icon("system-shutdown-symbolic");
+        assert!(handle.symbolic);
+        assert!(from_memory(&handle));
+    }
+
+    #[test]
+    fn the_settings_gear_is_ours_not_the_themes() {
+        let handle = icon("emblem-system-symbolic");
+        assert!(handle.symbolic);
+        assert!(from_memory(&handle));
+    }
+
+    #[test]
+    fn other_symbols_still_come_from_the_theme() {
+        assert!(!from_memory(&icon("audio-volume-high-symbolic")));
+    }
 
     #[test]
     fn packs_into_gaps() {
