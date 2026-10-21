@@ -80,7 +80,7 @@ fn panel_hue(panel: Panel) -> Hue {
 pub fn cpu_temp(chips: &[Chip]) -> Option<f32> {
     chips
         .iter()
-        .filter(|c| matches!(c.kind.as_str(), "k10temp" | "coretemp" | "zenpower" | "cpu_thermal"))
+        .filter(|c| super::sample::CPU_CHIPS.contains(&c.kind.as_str()))
         .flat_map(|c| &c.temps)
         .find(|t| matches!(t.label.as_str(), "Tctl" | "Tdie" | "Package id 0") || t.label.starts_with("temp"))
         .map(|t| t.celsius)

@@ -129,11 +129,18 @@ impl Meter {
         true
     }
 
+    /// Whether this one is the one counting, as of its last reading.
+    pub fn counts(&self) -> bool {
+        self.lock.is_some()
+    }
+
     /// Joules used since the last reading, counted if this one counts;
-    /// else what the counting one wrote, read again.
-    pub fn add(&mut self, joules: f64) {
+    /// else what the counting one wrote, read again when `shown`.
+    pub fn add(&mut self, joules: f64, shown: bool) {
         if !self.counting() {
-            self.ledger = load();
+            if shown {
+                self.ledger = load();
+            }
             return;
         }
         // Asked by another screen's applet.

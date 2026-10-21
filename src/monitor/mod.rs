@@ -40,6 +40,9 @@ const MAX_HEIGHT: f32 = crate::app::MAX_HEIGHT;
 const SCREEN_MARGIN: f32 = 66.0;
 /// How long an item past its limit stays on the bar after it's back under.
 const OVER_LINGER: Duration = Duration::from_secs(10);
+/// With the popup closed, how often the counting applet asks for the GPU's
+/// energy counter; it counts all since, so nothing is lost between.
+const GPU_ENERGY_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sort {
@@ -155,6 +158,8 @@ pub struct Monitor {
     bar_models: Vec<(BarItem, SingleSelectModel)>,
     /// When each item was last past its limit.
     over_at: HashMap<BarItem, Instant>,
+    /// The GPU's energy counter as last read, and when.
+    gpu_energy: Option<(u64, Instant)>,
 }
 
 /// The choices of each item with modes, the one set chosen.
@@ -194,11 +199,19 @@ impl Monitor {
             return Task::none();
         }
         self.reading = true;
-        let procs = self.wants_processes();
+        let full = self.popup.is_some();
+        let depth = sample::Depth {
+            full,
+            procs: self.wants_processes(),
+            // Only the one counting needs it; while the popup shows, at
+            // every reading, for the panel's numbers.
+            gpu_energy: self.meter.counts()
+                && (full || self.gpu_energy.is_none_or(|(_, at)| at.elapsed() >= GPU_ENERGY_EVERY)),
+        };
         Task::future(async move {
-            let reading = tokio::task::spawn_blocking(move || sample::reading(procs))
+            let reading = tokio::task::spawn_blocking(move || sample::reading(depth))
                 .await
-                .unwrap_or_else(|_| sample::reading(false));
+                .unwrap_or_else(|_| sample::reading(sample::Depth { procs: false, ..depth }));
             cosmic::action::app(Message::Reading(Box::new(reading)))
         })
     }
@@ -275,17 +288,24 @@ impl Monitor {
         }
         if let Some(gpu) = &new.gpu {
             rates.gpu_watts = gpu.watts;
-            let counted = old.gpu.as_ref().and_then(|g| g.energy_mj).zip(gpu.energy_mj);
-            joules += match counted {
-                Some((a, b)) if b >= a => (b - a) as f64 / 1000.0,
-                _ => f64::from(gpu.watts.unwrap_or(0.0)) * f64::from(dt.min(30.0)),
+            let guessed = f64::from(gpu.watts.unwrap_or(0.0)) * f64::from(dt.min(30.0));
+            joules += match (self.gpu_energy, gpu.energy_mj) {
+                // All since it was last read.
+                (Some((a, _)), Some(b)) if b >= a => (b - a) as f64 / 1000.0,
+                // Not read this time: the next one counts this too.
+                (Some(_), None) => 0.0,
+                // The first, or after the driver restarted.
+                _ => guessed,
             };
+            if let Some(b) = gpu.energy_mj {
+                self.gpu_energy = Some((b, Instant::now()));
+            }
         }
         // The rest, guessed; not for the time asleep.
         if rates.cpu_watts.is_some() || rates.gpu_watts.is_some() {
             joules += self.settings.rest_watts * f64::from(dt.min(30.0));
         }
-        self.meter.add(joules);
+        self.meter.add(joules, self.popup.is_some());
         // Drives and network, a second.
         for (name, read, written) in &new.disks {
             if let Some((_, r0, w0)) = old.disks.iter().find(|(n, ..)| n == name) {

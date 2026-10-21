@@ -177,8 +177,25 @@ pub fn info() -> Info {
     }
 }
 
-/// Everything now; the processes too when `procs`.
-pub fn reading(procs: bool) -> Reading {
+/// The CPU's own sensors, by their driver.
+pub const CPU_CHIPS: [&str; 4] = ["k10temp", "coretemp", "zenpower", "cpu_thermal"];
+
+/// What a reading takes.
+#[derive(Clone, Copy, Debug)]
+pub struct Depth {
+    /// Everything, for the popup; else only what the bar shows: the NVMe
+    /// drives' temperatures alone took ~18 ms a reading, asking the drives
+    /// themselves, maybe out of their power saving.
+    pub full: bool,
+    /// The processes too.
+    pub procs: bool,
+    /// The GPU's energy counter, ~10 ms to ask NVIDIA's driver.
+    pub gpu_energy: bool,
+}
+
+/// Everything now, or less, by `depth`.
+pub fn reading(depth: Depth) -> Reading {
+    let Depth { full, procs, gpu_energy } = depth;
     let loadavg = read("/proc/loadavg").unwrap_or_default();
     let mut parts = loadavg.split_whitespace();
     let mut load = [0.0; 3];
@@ -193,14 +210,14 @@ pub fn reading(procs: bool) -> Reading {
     Reading {
         at: Instant::now(),
         cpu: cpu_times(),
-        frequency: frequency(),
+        frequency: full.then(frequency).flatten(),
         memory: memory(),
-        chips: chips(),
-        gpu: nvidia().or_else(amd_gpu),
-        disks: disks(),
-        mounts: mounts(),
+        chips: chips(full),
+        gpu: nvidia(full, gpu_energy).or_else(amd_gpu),
+        disks: if full { disks() } else { Vec::new() },
+        mounts: if full { mounts() } else { Vec::new() },
         net: net(),
-        route: route(),
+        route: full.then(route).flatten(),
         rapl: rapl(),
         load,
         uptime: read("/proc/uptime")
@@ -285,7 +302,8 @@ fn memory() -> Memory {
     }
 }
 
-fn chips() -> Vec<Chip> {
+/// The sensors; with `all` false, the CPU's alone.
+fn chips(all: bool) -> Vec<Chip> {
     let Ok(entries) = fs::read_dir("/sys/class/hwmon") else {
         return Vec::new();
     };
@@ -297,6 +315,9 @@ fn chips() -> Vec<Chip> {
     let mut chips = Vec::new();
     for dir in dirs {
         let kind = read(dir.join("name")).unwrap_or_default().trim().to_owned();
+        if !all && !CPU_CHIPS.contains(&kind.as_str()) {
+            continue;
+        }
         let mut temps = Vec::new();
         let mut fans = Vec::new();
         let Ok(files) = fs::read_dir(&dir) else { continue };
@@ -610,14 +631,18 @@ unsafe fn load_nvml() -> Option<Nvml> {
     }
 }
 
-fn nvidia() -> Option<Gpu> {
+/// Use, temperature and watts take microseconds; the fan and the energy
+/// counter, milliseconds: those only when `full` and `energy`.
+fn nvidia(full: bool, energy: bool) -> Option<Gpu> {
     let nvml = NVML.as_ref()?;
     let d = nvml.device;
     unsafe {
         let mut utilization = Utilization::default();
         let usage = ((nvml.utilization)(d, &mut utilization) == 0).then_some(utilization.gpu as f32);
         let mut memory = NvmlMemory::default();
-        (nvml.memory)(d, &mut memory);
+        if full {
+            (nvml.memory)(d, &mut memory);
+        }
         let value = |f: unsafe extern "C" fn(Device, *mut u32) -> i32| {
             let mut v = 0;
             (f(d, &mut v) == 0).then_some(v)
@@ -626,8 +651,8 @@ fn nvidia() -> Option<Gpu> {
         let temp = ((nvml.temperature)(d, 0, &mut temp) == 0).then_some(temp as f32);
         let mut clock = 0;
         let clock = ((nvml.clock)(d, 0, &mut clock) == 0).then_some(clock);
-        let mut energy = 0;
-        let energy_mj = ((nvml.energy)(d, &mut energy) == 0).then_some(energy);
+        let mut counter = 0;
+        let energy_mj = (energy && (nvml.energy)(d, &mut counter) == 0).then_some(counter);
         Some(Gpu {
             name: nvml.name.clone(),
             usage: usage.unwrap_or(0.0),
@@ -637,7 +662,7 @@ fn nvidia() -> Option<Gpu> {
             watts: value(nvml.power).map(|mw| mw as f32 / 1000.0),
             watts_limit: value(nvml.limit).map(|mw| mw as f32 / 1000.0),
             clock,
-            fan: value(nvml.fan),
+            fan: if full { value(nvml.fan) } else { None },
             energy_mj,
         })
     }
