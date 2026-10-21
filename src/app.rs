@@ -95,6 +95,11 @@ pub type NotificationKey = (u32, bool);
 #[derive(Clone, Debug)]
 pub enum Message {
     TogglePopup,
+    /// The left button pressed on a window of the applet. On the bar's own,
+    /// it opens or closes the popup: taken from the window, not the button,
+    /// as after the popup closes the applet may not know where the pointer
+    /// is until it moves, and a button then misses the click.
+    PanelPress(window::Id),
     /// Opens the popup on a page by itself, for screenshots.
     Preview(Page),
     /// A right click on an icon of the bar: the popup, open on its page.
@@ -308,6 +313,8 @@ pub struct App {
     pub(crate) calendar_month: crate::calendar::Month,
     /// The clock's lines as last drawn: time and date.
     clock: (String, String),
+    /// When COSMIC last closed the popup, a click outside it.
+    closed_at: Option<std::time::Instant>,
     /// When the monitors' brightness was last read, on opening.
     displays_read: Option<std::time::Instant>,
     /// The item under the pointer while editing: it shows its handle.
@@ -748,6 +755,16 @@ impl cosmic::Application for App {
                     None,
                 ))]);
             }
+            Message::PanelPress(id) => {
+                // The click that closed the popup, if COSMIC closed it first,
+                // isn't one to open it again.
+                let just_closed = self
+                    .closed_at
+                    .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
+                if Some(id) == self.core.main_window_id() && !just_closed {
+                    return self.update(Message::TogglePopup);
+                }
+            }
             Message::Preview(page) => {
                 let open = self.update(Message::TogglePopup);
                 self.page = Some(page);
@@ -831,6 +848,7 @@ impl cosmic::Application for App {
             }
             Message::Closed(id) => {
                 if self.popup == Some(id) {
+                    self.closed_at = Some(std::time::Instant::now());
                     self.mark_seen();
                     self.leave_edit(false);
                     self.popup = None;
@@ -1656,6 +1674,12 @@ impl cosmic::Application for App {
             }
         }));
         subscriptions.push(window::resize_events().map(|(id, size)| Message::Resized(id, size)));
+        subscriptions.push(event::listen_with(|event, _, id| match event {
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                Some(Message::PanelPress(id))
+            }
+            _ => None,
+        }));
         if self.drag.is_some() {
             // Let go anywhere, on a tile or not.
             subscriptions.push(event::listen_with(|event, _, _| match event {
@@ -1818,7 +1842,6 @@ impl cosmic::Application for App {
             // Scroll for louder or quieter; the middle button mutes. The
             // area takes the left button too, so it opens the popup itself.
             let area = widget::mouse_area(panel_icon(self.volume_icon()))
-                .on_press(Message::TogglePopup)
                 .on_right_press(Message::OpenAt(Page::Sound))
                 .on_scroll(|delta| Message::ScrollVolume(scroll_steps(delta)))
                 .on_middle_press(Message::ToggleMute);
@@ -1861,7 +1884,6 @@ impl cosmic::Application for App {
                 None => {}
             }
             let area = widget::mouse_area(content)
-                .on_press(Message::TogglePopup)
                 .on_right_press(Message::OpenAt(Page::Power))
                 .on_scroll(|delta| Message::ScrollBrightness(scroll_steps(delta)));
             icons.push(tip(area.into(), text));
@@ -1911,7 +1933,8 @@ impl cosmic::Application for App {
         let button = button::custom(content)
             .padding(if horizontal { [0, major] } else { [major, 0] })
             .class(theme::Button::AppletIcon)
-            .on_press_down(Message::TogglePopup);
+            // Looks a button, but the press is the window's: see PanelPress.
+            .on_press(Message::None);
         applet.autosize_window(button).into()
     }
 

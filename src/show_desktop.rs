@@ -39,6 +39,10 @@ pub const APP_ID: &str = "io.github.Aenes0.CosmicCentral.ShowDesktop";
 pub enum Message {
     Ready(calloop::channel::Sender<()>),
     Toggle,
+    /// The left button pressed on a window: the bar's own, ours. Taken from
+    /// the window, as a button may miss it not knowing where the pointer is.
+    Press(cosmic::iced::window::Id),
+    None,
 }
 
 #[derive(Default)]
@@ -72,6 +76,12 @@ impl cosmic::Application for ShowDesktop {
     fn update(&mut self, message: Message) -> app::Task<Message> {
         match message {
             Message::Ready(tx) => self.tx = Some(tx),
+            Message::Press(id) => {
+                if Some(id) == self.core.main_window_id() {
+                    return self.update(Message::Toggle);
+                }
+            }
+            Message::None => {}
             Message::Toggle => {
                 if let Some(tx) = &self.tx {
                     _ = tx.send(());
@@ -82,7 +92,13 @@ impl cosmic::Application for ShowDesktop {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run_with(std::any::TypeId::of::<Message>(), |_| {
+        let press = cosmic::iced::event::listen_with(|event, _, id| match event {
+            cosmic::iced::Event::Mouse(cosmic::iced::mouse::Event::ButtonPressed(
+                cosmic::iced::mouse::Button::Left,
+            )) => Some(Message::Press(id)),
+            _ => None,
+        });
+        let wayland = Subscription::run_with(std::any::TypeId::of::<Message>(), |_| {
             stream::channel(4, |mut output: mpsc::Sender<Message>| async move {
                 let (tx, rx) = calloop::channel::channel();
                 _ = output.send(Message::Ready(tx)).await;
@@ -93,7 +109,8 @@ impl cosmic::Application for ShowDesktop {
                 });
                 futures::future::pending::<()>().await;
             })
-        })
+        });
+        Subscription::batch([press, wayland])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -117,7 +134,7 @@ impl cosmic::Application for ShowDesktop {
         .height(if horizontal { Length::Fixed(size) } else { Length::Fixed(10.0) })
         .padding(0)
         .class(theme::Button::AppletIcon)
-        .on_press(Message::Toggle);
+        .on_press(Message::None);
         applet.autosize_window(button).into()
     }
 }
