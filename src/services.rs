@@ -907,6 +907,36 @@ pub(crate) fn pactl() -> Command {
 
 /// `pactl subscribe`, which ends with the applet: left behind, each would
 /// hold one of the few connections PipeWire allows.
+/// PipeWire's change events, from one `pactl subscribe` the applet shares
+/// between those listening, started with the first of them and again if it
+/// goes away (say PipeWire restarted).
+pub(crate) fn pactl_events() -> tokio::sync::broadcast::Receiver<String> {
+    use std::sync::OnceLock;
+    static EVENTS: OnceLock<tokio::sync::broadcast::Sender<String>> = OnceLock::new();
+    let sender = EVENTS.get_or_init(|| {
+        let (tx, _) = tokio::sync::broadcast::channel(64);
+        let sender = tx.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Ok(mut child) = pactl_subscribe()
+                    .stdout(std::process::Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()
+                    && let Some(stdout) = child.stdout.take()
+                {
+                    let mut lines = tokio::io::BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        _ = sender.send(line);
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        });
+        tx
+    });
+    sender.subscribe()
+}
+
 pub(crate) fn pactl_subscribe() -> Command {
     let mut pactl = pactl();
     pactl.arg("subscribe");
@@ -968,21 +998,17 @@ pub async fn set_sink(name: String) {
 fn volume_subscription() -> Subscription<Update> {
     Subscription::run_with("volume", |_| {
         stream::channel(4, |mut output: mpsc::Sender<Update>| async move {
+            let mut events = pactl_events();
             loop {
                 _ = output.send(Update::Volume(volume().await)).await;
                 _ = output.send(Update::Microphone(microphone().await)).await;
-                let Ok(mut child) = pactl_subscribe()
-                    .stdout(std::process::Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn()
-                else {
-                    return futures::future::pending().await;
-                };
-                let Some(stdout) = child.stdout.take() else {
-                    return futures::future::pending().await;
-                };
-                let mut lines = tokio::io::BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                loop {
+                    let line = match events.recv().await {
+                        Ok(line) => line,
+                        // Fell behind: what's now, read again.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                        Err(_) => return futures::future::pending().await,
+                    };
                     if line.contains("sink") || line.contains("server") {
                         if output.send(Update::Volume(volume().await)).await.is_err() {
                             return;
@@ -999,8 +1025,6 @@ fn volume_subscription() -> Subscription<Update> {
                         }
                     }
                 }
-                // pactl went away, say PipeWire restarted.
-                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         })
     })

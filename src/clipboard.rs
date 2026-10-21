@@ -223,32 +223,14 @@ pub fn subscription() -> Subscription<Event> {
             let (tx, rx) = channel::channel();
             _ = output.send(Event::Ready(tx)).await;
             _ = output.send(Event::History(load())).await;
-            let watcher = output.clone();
             std::thread::spawn(move || {
                 if let Err(err) = run(output, rx) {
                     tracing::warn!("clipboard history stopped: {err}");
                 }
             });
-            // What the applet writing it down saved, the others show.
-            std::thread::spawn(move || watch(watcher));
             futures::future::pending::<()>().await;
         })
     })
-}
-
-/// Tells when the saved history changes, by its time.
-fn watch(mut output: mpsc::Sender<Event>) {
-    let mut seen = None;
-    loop {
-        let modified = std::fs::metadata(file()).and_then(|m| m.modified()).ok();
-        if modified != seen {
-            seen = modified;
-            if futures::executor::block_on(output.send(Event::History(load()))).is_err() {
-                return;
-            }
-        }
-        std::thread::sleep(Duration::from_secs(1));
-    }
 }
 
 /// Whether this applet writes the history down: the one holding the lock,

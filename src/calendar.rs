@@ -4,7 +4,7 @@
 //! the calendar in the popup: the day in words, and a month to page through,
 //! today lit.
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, Timelike};
 use cosmic::{
     Element,
     iced::{Alignment, Length},
@@ -59,6 +59,23 @@ impl Month {
         let next = self.shift(1).first();
         (next - self.first()).num_days() as u32
     }
+}
+
+/// Every minute, as it turns: the clock wakes once a minute, no more.
+pub fn minutes() -> cosmic::iced::Subscription<()> {
+    use cosmic::iced::futures::SinkExt;
+    cosmic::iced::Subscription::run_with("minutes", |_| {
+        cosmic::iced::stream::channel(1, |mut output: cosmic::iced::futures::channel::mpsc::Sender<()>| async move {
+            loop {
+                let now = Local::now();
+                let into = now.timestamp_subsec_millis() as u64 + u64::from(now.second()) * 1000;
+                tokio::time::sleep(std::time::Duration::from_millis(60_000 - into.min(59_999))).await;
+                if output.send(()).await.is_err() {
+                    return;
+                }
+            }
+        })
+    })
 }
 
 /// The time and the date, for the bar: `18:01` over `20/10/26`.

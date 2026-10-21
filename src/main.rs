@@ -24,6 +24,12 @@ mod workspaces;
 pub const APP_ID: &str = "io.github.Aenes0.CosmicCentral";
 
 fn main() -> cosmic::iced::Result {
+    // A couple of threads do: an applet waits on events, it doesn't crunch;
+    // one per core (24 here) only took memory.
+    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
+        // SAFETY: first thing, before any thread starts.
+        unsafe { std::env::set_var("TOKIO_WORKER_THREADS", "2") };
+    }
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(

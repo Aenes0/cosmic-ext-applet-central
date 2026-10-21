@@ -8,7 +8,6 @@ use std::{collections::HashSet, time::Duration};
 use cosmic::iced::{Subscription, stream};
 use futures::{SinkExt, channel::mpsc};
 use serde_json::Value;
-use tokio::io::AsyncBufReadExt;
 
 use crate::{
     latest::Latest,
@@ -415,15 +414,7 @@ pub fn privacy_subscription() -> Subscription<Privacy> {
     Subscription::run_with("privacy", |_| {
         stream::channel(4, |mut output: mpsc::Sender<Privacy>| async move {
             let mut last = None;
-            let mut events = crate::services::pactl_subscribe()
-                .stdout(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .ok()
-                .and_then(|mut child| {
-                    let stdout = child.stdout.take()?;
-                    Some((child, tokio::io::BufReader::new(stdout).lines()))
-                });
+            let mut events = Some(crate::services::pactl_events());
             // Cameras are looked at when one is opened or closed, and now and
             // then for the rest; recording, as streams change.
             let (tx, mut opened) = tokio::sync::mpsc::unbounded_channel();
@@ -439,13 +430,16 @@ pub fn privacy_subscription() -> Subscription<Privacy> {
             };
             loop {
                 match &mut events {
-                    Some((_, lines)) => tokio::select! {
-                        line = lines.next_line() => match line {
-                            Ok(Some(line)) if line.contains("source-output") => {
+                    Some(lines) => tokio::select! {
+                        line = lines.recv() => match line {
+                            Ok(line) if line.contains("source-output") => {
                                 privacy.microphone = recording().await;
                             }
-                            Ok(Some(_)) => continue,
-                            _ => events = None,
+                            Ok(_) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                privacy.microphone = recording().await;
+                            }
+                            Err(_) => events = None,
                         },
                         _ = timer.tick() => {
                             if cameras_open || sandboxed {

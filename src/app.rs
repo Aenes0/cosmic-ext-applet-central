@@ -714,6 +714,9 @@ impl cosmic::Application for App {
                 self.popup = Some(id);
                 self.page = Some(Page::Main);
                 self.calendar_month = crate::calendar::Month::now();
+                // What another screen's applet wrote down: read now, not
+                // watched all the time.
+                self.clipboard = crate::clipboard::load();
                 // The main monitor's brightness, for its slider: read when
                 // the popup opens, but not often, and only that one's (each
                 // DDC read stalls the GPU's I²C for a moment).
@@ -1663,8 +1666,7 @@ impl cosmic::Application for App {
             }));
         }
         if self.panel_icons.get(BarItem::Clock) != Show::Never {
-            subscriptions
-                .push(iced::time::every(Duration::from_secs(5)).map(|_| Message::ClockTick));
+            subscriptions.push(crate::calendar::minutes().map(|()| Message::ClockTick));
         }
         if self.dnd_until.is_some() {
             subscriptions.push(
