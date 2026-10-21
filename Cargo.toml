@@ -8,7 +8,7 @@ description = "Quick settings applet for the COSMIC panel, like the macOS Contro
 [dependencies]
 cosmic-settings-a11y-manager-subscription = { git = "https://github.com/pop-os/cosmic-settings", rev = "ae5c750" }
 cosmic-settings-accessibility-subscription = { git = "https://github.com/pop-os/cosmic-settings", rev = "ae5c750" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures = "0.3"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

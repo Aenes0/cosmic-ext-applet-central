@@ -245,7 +245,7 @@ pub const PANEL_GAP: f32 = 8.0;
 
 /// A panel of the popup, as COSMIC draws a popup: there are two on the main
 /// page, the controls and the notifications, apart.
-pub fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+pub fn panel<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Element<'a, M> {
     widget::container(content)
         .width(Length::Fill)
         .class(theme::Container::custom(|theme| {

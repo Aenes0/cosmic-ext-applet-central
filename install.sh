@@ -13,7 +13,7 @@ bin=cosmic-ext-applet-central
 cargo build --release
 install -Dm0755 "target/release/$bin" "$prefix/bin/$bin"
 mkdir -p "$prefix/share/applications"
-for entry in "$id" "$id.ShowDesktop"; do
+for entry in "$id" "$id.ShowDesktop" "$id.Monitor"; do
     sed "s|@bindir@|$prefix/bin|" "data/$entry.desktop.in" > "$prefix/share/applications/$entry.desktop"
 done
 install -Dm0644 "data/$id.metainfo.xml" "$prefix/share/metainfo/$id.metainfo.xml"

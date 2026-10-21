@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=System monitor
+Name[pt_BR]=Monitor do sistema
+Comment=Energy used, CPU, GPU, memory, drives, network, sensors and processes
+Comment[pt_BR]=Energia consumida, CPU, GPU, memória, discos, rede, sensores e processos
+Type=Application
+Exec=@bindir@/cosmic-ext-applet-central --monitor
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Monitor;CPU;GPU;Memory;Temperature;Energy;Power;
+Icon=utilities-system-monitor-symbolic
+NoDisplay=true
+X-CosmicApplet=true
+X-HostWaylandDisplay=true

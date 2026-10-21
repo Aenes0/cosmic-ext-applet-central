@@ -103,6 +103,44 @@ juntos ou mais afastados, para telas grandes: Pequeno (como antes), Médio ou Gr
 popup não muda.
 O botão de desfazer no topo restaura o padrão. A escolha fica salva na configuração do COSMIC.
 
+## Monitor do sistema
+
+Um segundo applet do mesmo programa (`--monitor`), para a ponta esquerda do painel: o
+espelho do Central, com o popup colado no canto esquerdo, alto como a tela, nos mesmos
+painéis. Na barra, cada um com sua cor: o consumo em watts, sempre, em letra menor;
+CPU (uso e temperatura), GPU (uso e temperatura) e memória, cada um nunca, sempre ou só
+acima do limite (70% de uso ou 65°; a memória, 70% cheia), que aparece na hora, com o
+número que passou em âmbar, e some 10 s depois de voltar; e download/upload, se ligado.
+
+No popup, cada painel recolhe no título, e o lápis organiza: mostrar, esconder e mudar a
+ordem dos painéis e escolher o que vai na barra.
+
+- **Energia**, em destaque: os watts de agora (CPU + GPU + uma estimativa do resto do PC,
+  que você define), o gráfico do último minuto, a energia de hoje, do mês e do total em
+  kWh, com o custo pela tarifa que você digitar, e os últimos 14 dias. A contagem segue
+  com o popup fechado e fica em `~/.local/state/cosmic-central/energy.json`; com o painel
+  em vários monitores, só um applet conta (um `flock`), e os outros leem o que ele salvou.
+- **CPU**: uso, gráfico, temperatura, clock médio, consumo, carga e uma barrinha por
+  thread. **GPU**: uso, temperatura, consumo e limite, clock, ventoinha e memória de vídeo.
+- **Memória** (em uso, cache, livre, swap e zram), **Discos** (leitura e escrita, cada
+  disco com o modelo e a temperatura, e quanto cada partição ocupa), **Rede** (download e
+  upload ao vivo, interface, IP e o total desde que ligou), **Sensores** (todas as
+  temperaturas e ventoinhas que o hwmon expõe) e **Sistema**.
+- **Processos**: os programas que mais usam CPU ou memória, com os processos de cada um
+  juntos (o navegador e as abas dele); o "×" encerra (SIGTERM), depois de confirmar, os
+  seus programas, nunca os que derrubariam a sessão.
+
+Ele lê tudo a cada segundo com o popup aberto e a cada 5 s com ele fechado; os
+processos, só enquanto o painel deles está aberto.
+
+| Dado | Fonte |
+| --- | --- |
+| CPU, memória, discos, rede, processos | `/proc` |
+| Temperaturas, ventoinhas | `/sys/class/hwmon` |
+| Consumo da CPU | RAPL (`/sys/class/powercap`); só o root lê por padrão, por causa do [PLATYPUS](https://platypusattack.com): `sudo .dev/sistema/permitir-rapl.sh` libera só para o grupo do seu usuário, na hora |
+| GPU NVIDIA | a biblioteca do driver (`libnvidia-ml.so`), sem rodar o `nvidia-smi` |
+| GPU AMD | `/sys/class/drm` |
+
 ## Menu Iniciar
 
 O menu Iniciar no estilo do Windows 11, que começou aqui, virou um applet à parte:

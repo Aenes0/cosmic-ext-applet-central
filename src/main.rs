@@ -11,6 +11,7 @@ mod i18n;
 mod layout;
 mod latest;
 mod media;
+mod monitor;
 mod notifications;
 mod pages;
 mod services;
@@ -40,6 +41,10 @@ fn main() -> cosmic::iced::Result {
     // The same program is also the "show desktop" button, its own applet.
     if std::env::args().any(|arg| arg == "--show-desktop") {
         return cosmic::applet::run::<show_desktop::ShowDesktop>(());
+    }
+    // And the system monitor, at the bar's other end.
+    if std::env::args().any(|arg| arg == "--monitor") {
+        return cosmic::applet::run::<monitor::Monitor>(());
     }
     cosmic::applet::run::<app::App>(())
 }
