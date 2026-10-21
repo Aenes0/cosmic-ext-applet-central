@@ -103,6 +103,41 @@ juntos ou mais afastados, para telas grandes: Pequeno (como antes), Médio ou Gr
 popup não muda.
 O botão de desfazer no topo restaura o padrão. A escolha fica salva na configuração do COSMIC.
 
+## Menu Iniciar
+
+Junta o lançador da tecla Super e a biblioteca de apps do COSMIC num menu só, como o
+novo do Windows 11, no tema escuro ou claro do sistema; ele sobe do painel ao abrir. Numa
+página só, de cima para baixo:
+
+- a **pesquisa**, já selecionada (é só digitar): a melhor correspondência em cima, os
+  apps, as janelas e os arquivos embaixo, e à direita o escolhido, grande, com o que dá
+  para fazer com ele (Abrir, Nova janela, Fixar…); as setas e o Enter escolhem;
+- **Fixados**, em duas linhas de oito, com **Mostrar tudo** para o resto;
+- **Abertos**: as janelas abertas; clicar vai para a janela;
+- **Recomendados**: os apps instalados há pouco ("Adicionado recentemente"), os abertos
+  pelo menu e os arquivos mexidos há pouco ("Há 3 h"), com **Mostrar tudo**. Os arquivos
+  vêm do `recently-used.xbel` (também o dos Flatpaks) e dos mais novos em Área de
+  trabalho, Downloads, Documentos, Imagens, Vídeos e Música, porque os apps do COSMIC
+  não registram o que abrem;
+- **Todos**, em **Exibir: Categoria** (pastas com quatro ícones, que abrem por cima,
+  como no Windows), **Grade** ou **Lista**;
+- no rodapé, o usuário (Alterar configurações da conta, Bloquear, Sair), Arquivos,
+  Configurações e o botão de energia (Bloquear, Suspender, Desligar, Reiniciar).
+
+O clique direito num app abre o menu dele: Abrir, as ações do `.desktop` e
+Fixar/Desafixar do Iniciar; numa janela, Ir para, Nova janela e Fechar; num arquivo, Abrir
+e Abrir local do arquivo. Esc fecha um menu, depois limpa a pesquisa, depois fecha tudo;
+clicar fora também fecha. Na primeira vez, os fixados são os do dock, mais Arquivos,
+Terminal, Configurações, Loja e Editor de Texto.
+
+É o mesmo programa, rodado com `--start`: o primeiro fica aberto, escondido entre um uso
+e outro, e os seguintes só pedem a ele, pelo D-Bus, para abrir ou fechar.
+`./start-menu.sh` faz a tecla Super (e Super+A) abrir o menu e põe o botão **Iniciar**
+no lugar dos botões do lançador e da biblioteca no painel; `./start-menu.sh --undo` volta
+os do COSMIC. `COSMIC_START_PREVIEW` (`recommended`, `power`, `user`, `grid`, `list`,
+`end`, o número de uma categoria ou um texto para pesquisar) abre o menu já ali, para
+tirar print.
+
 ## Instalar
 
 Pela COSMIC Store (Flatpak), que funciona em qualquer distribuição, ou a partir do código:

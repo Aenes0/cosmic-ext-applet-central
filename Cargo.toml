@@ -17,6 +17,8 @@ serde_json = "1"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = [
     "applet",
     "dbus-config",
+    "desktop",
+    "desktop-systemd-scope",
     "multi-window",
     "tokio",
     "wayland",
