@@ -2223,6 +2223,17 @@ cctk::delegate_toplevel_manager!(State);
 sctk::delegate_seat!(State);
 sctk::delegate_registry!(State);
 
+/// This program, where it is now: after a reinstall the running one's file
+/// is gone, and Linux names it "… (deleted)"; the new one is at that path.
+fn self_exe() -> PathBuf {
+    std::env::current_exe()
+        .map(|exe| {
+            let path = exe.to_string_lossy();
+            PathBuf::from(path.strip_suffix(" (deleted)").unwrap_or(&path))
+        })
+        .unwrap_or_else(|_| PathBuf::from("cosmic-ext-applet-central"))
+}
+
 /// The panel's button: four squares, as Windows has it; a click opens the
 /// menu, or closes it.
 #[derive(Default)]
@@ -2260,8 +2271,7 @@ impl cosmic::Application for StartButton {
             if toggle_running() {
                 return;
             }
-            let Ok(exe) = std::env::current_exe() else { return };
-            let mut command = std::process::Command::new(exe);
+            let mut command = std::process::Command::new(self_exe());
             command.arg("--start");
             for (key, _) in std::env::vars_os() {
                 let key_str = key.to_string_lossy();
