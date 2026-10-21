@@ -40,6 +40,23 @@ const MAX_HEIGHT: f32 = crate::app::MAX_HEIGHT;
 const SCREEN_MARGIN: f32 = 66.0;
 /// How long an item past its limit stays on the bar after it's back under.
 const OVER_LINGER: Duration = Duration::from_secs(10);
+/// What of an item can be past its limit, and shows apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Part {
+    Usage,
+    Temp,
+}
+
+/// How an item's numbers sit on the bar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Look {
+    Normal,
+    /// The power: smaller.
+    Small,
+    /// The network: smaller, one over the other.
+    Stacked,
+}
+
 /// With the popup closed, how often the counting applet asks for the GPU's
 /// energy counter; it counts all since, so nothing is lost between.
 const GPU_ENERGY_EVERY: Duration = Duration::from_secs(60);
@@ -156,8 +173,8 @@ pub struct Monitor {
     closed_at: Option<Instant>,
     /// Each item with modes: its choice on the arranging.
     bar_models: Vec<(BarItem, SingleSelectModel)>,
-    /// When each item was last past its limit.
-    over_at: HashMap<BarItem, Instant>,
+    /// When each item's use and temperature were last past their limits.
+    over_at: HashMap<(BarItem, Part), Instant>,
     /// The GPU's energy counter as last read, and when.
     gpu_energy: Option<(u64, Instant)>,
 }
@@ -233,8 +250,19 @@ impl Monitor {
         match self.settings.bar_mode(item) {
             BarMode::Never => false,
             BarMode::Always => true,
-            BarMode::Over => self.over_at.get(&item).is_some_and(|at| at.elapsed() < OVER_LINGER),
+            BarMode::Over => self.lingers(item, Part::Usage) || self.lingers(item, Part::Temp),
         }
+    }
+
+    /// Whether this part of an item was past its limit lately.
+    fn lingers(&self, item: BarItem, part: Part) -> bool {
+        self.over_at.get(&(item, part)).is_some_and(|at| at.elapsed() < OVER_LINGER)
+    }
+
+    /// Whether this part of an item shows, the item on the bar: past its
+    /// limit, only what went past.
+    fn shows_part(&self, item: BarItem, part: Part) -> bool {
+        self.settings.bar_mode(item) != BarMode::Over || self.lingers(item, part)
     }
 
     /// Of an item with modes: whether its use, and its temperature, are past
@@ -361,8 +389,10 @@ impl Monitor {
         self.now = Some(new);
         for item in BarItem::ALL.into_iter().filter(|i| i.has_modes()) {
             let (usage, temp) = self.past_limits(item);
-            if usage || temp {
-                self.over_at.insert(item, Instant::now());
+            for (part, past) in [(Part::Usage, usage), (Part::Temp, temp)] {
+                if past {
+                    self.over_at.insert((item, part), Instant::now());
+                }
             }
         }
     }
@@ -664,12 +694,13 @@ impl cosmic::Application for Monitor {
         // Each item: its icon, in its color, and its numbers on one line, as
         // wide as the widest they can be (a template under each, unseen, in
         // the same font), so the bar doesn't shift or wrap as they change.
-        // A number past its limit in amber; the power, smaller.
+        // A number past its limit in amber; the power smaller, the network
+        // too and stacked.
         let dark = theme::active().cosmic().is_dark;
         let item = |icon: widget::icon::Handle,
                     hue: chart::Hue,
                     parts: Vec<(String, &'static str, bool)>,
-                    small: bool|
+                    look: Look|
          -> Element<'_, Message> {
             let icon = widget::icon::icon(icon)
                 .size(size)
@@ -677,7 +708,9 @@ impl cosmic::Application for Monitor {
                     iced::widget::svg::Style { color: Some(hue.color(theme.cosmic().is_dark)) }
                 })));
             let one_line = iced::widget::text::Wrapping::None;
-            let text = |text: String| if small { widget::text::caption(text) } else { applet.text(text) };
+            let text = |text: String| {
+                if look == Look::Normal { applet.text(text) } else { widget::text::caption(text) }
+            };
             let hot = |past: bool| {
                 if past {
                     theme::Text::Color(chart::Hue::Warm.color(dark))
@@ -685,18 +718,33 @@ impl cosmic::Application for Monitor {
                     theme::Text::Default
                 }
             };
+            let numbers = |number: String, widest: &str, past: bool| {
+                iced::widget::stack(vec![
+                    text(widest.to_owned())
+                        .wrapping(one_line)
+                        .class(theme::Text::Color(iced::Color::TRANSPARENT))
+                        .into(),
+                    text(number).wrapping(one_line).class(hot(past)).into(),
+                ])
+            };
+            if horizontal && look == Look::Stacked {
+                // Tight, so the two lines fit the bar.
+                let lines: Vec<Element<'_, Message>> =
+                    parts.into_iter().map(|(n, widest, past)| numbers(n, widest, past).into()).collect();
+                return widget::row::with_children(vec![
+                    icon.into(),
+                    widget::column::with_children(lines).spacing(-2).into(),
+                ])
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into();
+            }
             if horizontal {
                 let mut row = widget::row::with_capacity(parts.len() + 1).push(icon);
                 for (at, (number, widest, past)) in parts.into_iter().enumerate() {
                     // Between the numbers, a space of their own.
                     let space = if at > 0 { " " } else { "" };
-                    row = row.push(iced::widget::stack(vec![
-                        text(format!("{space}{widest}"))
-                            .wrapping(one_line)
-                            .class(theme::Text::Color(iced::Color::TRANSPARENT))
-                            .into(),
-                        text(format!("{space}{number}")).wrapping(one_line).class(hot(past)).into(),
-                    ]));
+                    row = row.push(numbers(format!("{space}{number}"), &format!("{space}{widest}"), past));
                 }
                 row.spacing(4).align_y(Alignment::Center).into()
             } else {
@@ -717,9 +765,14 @@ impl cosmic::Application for Monitor {
                 continue;
             }
             let (usage_past, temp_past) = self.past_limits(bar_item);
+            let (show_usage, show_temp) =
+                (self.shows_part(bar_item, Part::Usage), self.shows_part(bar_item, Part::Temp));
             let usage_and_temp = |usage: f32, temp: Option<f32>| {
-                let mut parts = vec![(format!("{usage:.0}%"), "100%", usage_past)];
-                if let Some(temp) = degrees(temp) {
+                let mut parts = Vec::new();
+                if show_usage {
+                    parts.push((format!("{usage:.0}%"), "100%", usage_past));
+                }
+                if let Some(temp) = degrees(temp).filter(|_| show_temp) {
                     parts.push((temp, "100°", temp_past));
                 }
                 parts
@@ -729,7 +782,7 @@ impl cosmic::Application for Monitor {
                     panels::icon_cpu(),
                     chart::Hue::Cpu,
                     usage_and_temp(self.rates.cpu, now.and_then(|n| panels::cpu_temp(&n.chips))),
-                    false,
+                    Look::Normal,
                 )),
                 BarItem::Gpu => {
                     if let Some(gpu) = now.and_then(|n| n.gpu.as_ref()) {
@@ -737,7 +790,7 @@ impl cosmic::Application for Monitor {
                             panels::icon_gpu(),
                             chart::Hue::Gpu,
                             usage_and_temp(gpu.usage, gpu.temp),
-                            false,
+                            Look::Normal,
                         ));
                     }
                 }
@@ -751,7 +804,7 @@ impl cosmic::Application for Monitor {
                                 "00,0 GB",
                                 usage_past,
                             )],
-                            false,
+                            Look::Normal,
                         ));
                     }
                 }
@@ -761,19 +814,18 @@ impl cosmic::Application for Monitor {
                             panels::icon_bolt(),
                             chart::Hue::Energy,
                             vec![(format!("{watts:.0} W"), "0000 W", false)],
-                            true,
+                            Look::Small,
                         ));
                     }
                 }
                 BarItem::Network => items.push(item(
                     crate::tiles::icon("network-transmit-receive-symbolic"),
                     chart::Hue::Download,
-                    vec![(
-                        format!("↓{} ↑{}", rate_short(self.rates.down), rate_short(self.rates.up)),
-                        "↓999K ↑999K",
-                        false,
-                    )],
-                    false,
+                    vec![
+                        (format!("↓{}", rate_short(self.rates.down)), "↓999K", false),
+                        (format!("↑{}", rate_short(self.rates.up)), "↑999K", false),
+                    ],
+                    Look::Stacked,
                 )),
             }
         }
@@ -790,9 +842,15 @@ impl cosmic::Application for Monitor {
         } else {
             widget::column::with_children(items).spacing(gap).align_x(Alignment::Center).into()
         };
-        let button = button::custom(
-            widget::container(content).padding(if horizontal { [minor, 0] } else { [0, minor] }),
-        )
+        // As tall as the bar, padding and all, the numbers centered in it: the
+        // network's two lines take more than the icon's height, but not the
+        // bar's, which they would otherwise stretch.
+        let content = if horizontal {
+            widget::container(content).center_y(Length::Fixed(f32::from(size + 2 * minor)))
+        } else {
+            widget::container(content).padding([0, minor])
+        };
+        let button = button::custom(content)
         .padding(if horizontal { [0, major] } else { [major, 0] })
         .class(theme::Button::AppletIcon)
         .on_press(Message::None);
@@ -814,5 +872,41 @@ impl cosmic::Application for Monitor {
 
     fn on_close_requested(&self, id: window::Id) -> Option<Message> {
         Some(Message::Closed(id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn past_its_limit_only_the_part_that_went_past_shows() {
+        let mut monitor = Monitor::default();
+        monitor.over_at.insert((BarItem::Cpu, Part::Temp), Instant::now());
+
+        assert!(monitor.on_bar(BarItem::Cpu));
+        assert!(monitor.shows_part(BarItem::Cpu, Part::Temp));
+        assert!(!monitor.shows_part(BarItem::Cpu, Part::Usage));
+        assert!(!monitor.on_bar(BarItem::Gpu));
+    }
+
+    #[test]
+    fn a_part_hides_once_it_has_been_back_under_long_enough() {
+        let mut monitor = Monitor::default();
+        let long_ago = Instant::now() - OVER_LINGER - Duration::from_secs(1);
+        monitor.over_at.insert((BarItem::Cpu, Part::Usage), long_ago);
+
+        assert!(!monitor.on_bar(BarItem::Cpu));
+        assert!(!monitor.shows_part(BarItem::Cpu, Part::Usage));
+    }
+
+    #[test]
+    fn always_shows_both_parts() {
+        let mut monitor = Monitor::default();
+        monitor.settings.bar_modes.insert(BarItem::Cpu, BarMode::Always);
+
+        assert!(monitor.on_bar(BarItem::Cpu));
+        assert!(monitor.shows_part(BarItem::Cpu, Part::Usage));
+        assert!(monitor.shows_part(BarItem::Cpu, Part::Temp));
     }
 }
