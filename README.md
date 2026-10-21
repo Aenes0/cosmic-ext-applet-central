@@ -121,6 +121,25 @@ número que passou em âmbar, e some 10 s depois de voltar; e download/upload, s
 No popup, cada painel recolhe no título, e o lápis organiza: mostrar, esconder e mudar a
 ordem dos painéis e escolher o que vai na barra.
 
+No topo, junto do nome do PC, o **clima**, como nos cards da Samsung: sobre um céu em
+gradiente que muda com o tempo e a hora (amanhecer e entardecer em tons quentes, com o sol
+no horizonte, 40 minutos antes e depois do nascer e do pôr; de dia, o sol no céu, que
+cruza da esquerda para a direita, e raios entre as nuvens; de noite, estrelas, também
+entre as nuvens, e a lua na fase do dia, como se vê do hemisfério do lugar), a
+temperatura grande, o ícone, a sensação, a
+máxima e a mínima e as próximas 24 horas; a seta abre umidade, vento, chuva, UV, nascer e
+pôr do sol e os próximos 7 dias. Ao abrir, a cena se mexe por alguns segundos (chuva,
+neve, nuvens, estrelas, o sol girando) e pousa: cada quadro redesenha o popup inteiro por
+software, e ficar se mexendo gastaria metade de um núcleo. Os dados vêm de três serviços
+sem chave, [Open-Meteo](https://open-meteo.com), [MET Norway](https://api.met.no) e
+[wttr.in](https://wttr.in), e cada número é a mediana dos que responderam; quando a
+temperatura deles difere em mais de 3°, um aviso mostra a faixa. Um dos três applets lê
+a cada 30 minutos e grava para os outros. O local começa no CEP 30330-330 (Belo
+Horizonte) e muda pelo alfinete: um CEP ([AwesomeAPI](https://cep.awesomeapi.com.br), ou
+a [BrasilAPI](https://brasilapi.com.br)) ou o nome de uma cidade
+([Open-Meteo Geocoding](https://open-meteo.com/en/docs/geocoding-api)). Na barra, o ícone
+e a temperatura, se ligado.
+
 - **Energia**, em destaque: os watts de agora (CPU + GPU + uma estimativa do resto do PC,
   que você define), o gráfico do último minuto, a energia de hoje, do mês e do total em
   kWh, com o custo pela tarifa que você digitar, e os últimos 14 dias. A contagem segue

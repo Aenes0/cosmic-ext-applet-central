@@ -270,18 +270,18 @@ impl Monitor {
             widget::column::with_children(panels).spacing(crate::pages::PANEL_GAP),
         )
         .height(Length::Fill);
-        widget::column::with_children(vec![self.header(), list.into()])
+        widget::column::with_children(vec![self.header_and_weather(), list.into()])
             .spacing(crate::pages::PANEL_GAP)
             .height(Length::Fixed(self.max_height()))
             .into()
     }
 
     /// The machine's name and for how long it's up; editing.
-    fn header(&self) -> Element<'_, Message> {
+    fn header_row(&self) -> Element<'_, Message> {
         let t = texts();
         let spacing = theme::spacing();
         let up = self.now.as_ref().map(|n| format!("{} {}", t.up_for, uptime(n.uptime))).unwrap_or_default();
-        crate::pages::panel(
+        Element::from(
             widget::row::with_children(vec![
                 badge(icon("utilities-system-monitor-symbolic"), Hue::Cpu, 30.0),
                 widget::column::with_children(vec![
@@ -300,6 +300,18 @@ impl Monitor {
             .spacing(spacing.space_s)
             .align_y(Alignment::Center)
             .padding([spacing.space_xs, spacing.space_s]),
+        )
+    }
+
+    /// The header, and under it the weather.
+    fn header_and_weather(&self) -> Element<'_, Message> {
+        let spacing = theme::spacing();
+        crate::pages::panel(
+            widget::column::with_children(vec![
+                self.header_row(),
+                widget::container(self.weather_block()).padding([0, spacing.space_xxs, spacing.space_xxs, spacing.space_xxs]).into(),
+            ])
+            .spacing(spacing.space_xxs),
         )
     }
 

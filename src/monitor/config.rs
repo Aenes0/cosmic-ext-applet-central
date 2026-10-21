@@ -87,6 +87,7 @@ impl Panel {
 /// Something the bar can show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BarItem {
+    Weather,
     Cpu,
     Gpu,
     Memory,
@@ -95,11 +96,12 @@ pub enum BarItem {
 }
 
 impl BarItem {
-    pub const ALL: [BarItem; 5] =
-        [BarItem::Cpu, BarItem::Gpu, BarItem::Memory, BarItem::Power, BarItem::Network];
+    pub const ALL: [BarItem; 6] =
+        [BarItem::Weather, BarItem::Cpu, BarItem::Gpu, BarItem::Memory, BarItem::Power, BarItem::Network];
 
     fn id(self) -> &'static str {
         match self {
+            BarItem::Weather => "weather",
             BarItem::Cpu => "cpu",
             BarItem::Gpu => "gpu",
             BarItem::Memory => "memory",
@@ -117,6 +119,7 @@ impl BarItem {
     pub fn name(self) -> &'static str {
         let t = texts();
         match self {
+            BarItem::Weather => t.bar_weather,
             BarItem::Cpu => t.bar_cpu,
             BarItem::Gpu => t.bar_gpu,
             BarItem::Memory => t.memory,
@@ -177,6 +180,8 @@ pub struct Settings {
     /// Watts the rest of the computer takes, guessed: board, memory,
     /// drives, fans, and what the power supply loses.
     pub rest_watts: f64,
+    /// The weather's details and days shown, not just now and the hours.
+    pub weather_expanded: bool,
 }
 
 impl Default for Settings {
@@ -189,6 +194,7 @@ impl Default for Settings {
             bar_modes: HashMap::new(),
             tariff: None,
             rest_watts: 0.0,
+            weather_expanded: false,
         }
     }
 }
@@ -238,6 +244,7 @@ impl Settings {
             bar_modes,
             tariff: get::<f64>("tariff").filter(|t| *t > 0.0),
             rest_watts: get::<f64>("rest_watts").unwrap_or(0.0).max(0.0),
+            weather_expanded: get::<bool>("weather_expanded").unwrap_or(false),
         }
     }
 
@@ -293,6 +300,11 @@ impl Settings {
         set("bar_hidden", self.bar_hidden.iter().map(|b| b.id()).collect::<Vec<_>>());
     }
 
+    pub fn toggle_weather_expanded(&mut self) {
+        self.weather_expanded = !self.weather_expanded;
+        set("weather_expanded", self.weather_expanded);
+    }
+
     pub fn set_tariff(&mut self, tariff: Option<f64>) {
         self.tariff = tariff.filter(|t| *t > 0.0);
         set("tariff", self.tariff.unwrap_or(0.0));
@@ -325,4 +337,14 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, item: T) {
         }
         None => list.push(item),
     }
+}
+
+/// Where the weather is, as last chosen on any screen's applet; at first,
+/// CEP 30330-330.
+pub fn weather_place() -> super::weather::Place {
+    get::<super::weather::Place>("weather_place").unwrap_or_default()
+}
+
+pub fn set_weather_place(place: &super::weather::Place) {
+    set("weather_place", place);
 }

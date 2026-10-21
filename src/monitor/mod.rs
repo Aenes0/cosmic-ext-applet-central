@@ -11,6 +11,7 @@ mod energy;
 mod panels;
 mod sample;
 mod texts;
+mod weather;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -60,6 +61,10 @@ enum Look {
 /// With the popup closed, how often the counting applet asks for the GPU's
 /// energy counter; it counts all since, so nothing is lost between.
 const GPU_ENERGY_EVERY: Duration = Duration::from_secs(60);
+/// How often the weather is looked at: a file's date, mostly.
+const WEATHER_TICK: Duration = Duration::from_secs(60);
+/// After a failed reading, how long until the next try.
+const WEATHER_RETRY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sort {
@@ -94,6 +99,18 @@ pub enum Message {
     /// A program whose processes to end, asked first; none, not now.
     AskEnd(Option<String>),
     End(String),
+    /// Time to look at the weather: what another applet wrote, or to read
+    /// it again.
+    WeatherTick,
+    /// Read, or not; and whether it was tried (another applet may be at it).
+    WeatherFetched(Option<Box<weather::Weather>>, bool),
+    ToggleWeatherExpanded,
+    /// Into choosing a place, or out of it.
+    EditPlace(bool),
+    PlaceInput(String),
+    SearchPlace,
+    PlacesFound(Vec<weather::Place>),
+    PickPlace(weather::Place),
     None,
 }
 
@@ -177,6 +194,17 @@ pub struct Monitor {
     over_at: HashMap<(BarItem, Part), Instant>,
     /// The GPU's energy counter as last read, and when.
     gpu_energy: Option<(u64, Instant)>,
+    pub(crate) weather: Option<weather::Weather>,
+    /// When the written-down weather last changed, as last read.
+    weather_seen: Option<std::time::SystemTime>,
+    pub(crate) weather_fetching: bool,
+    /// When reading it last failed, not to ask again and again offline.
+    weather_failed_at: Option<Instant>,
+    pub(crate) place_editing: bool,
+    pub(crate) place_input: String,
+    /// What a search found; none while not searched.
+    pub(crate) place_results: Option<Vec<weather::Place>>,
+    pub(crate) place_searching: bool,
 }
 
 /// The choices of each item with modes, the one set chosen.
@@ -252,6 +280,35 @@ impl Monitor {
             BarMode::Always => true,
             BarMode::Over => self.lingers(item, Part::Usage) || self.lingers(item, Part::Temp),
         }
+    }
+
+    /// What another applet wrote down; and the weather read again when
+    /// it's old or of another place, by one applet of the three.
+    fn weather_tick(&mut self, force: bool) -> app::Task<Message> {
+        let seen = weather::modified();
+        if seen.is_some() && seen != self.weather_seen {
+            if let Some(written) = weather::load() {
+                self.weather = Some(written);
+            }
+            self.weather_seen = seen;
+        }
+        let place = config::weather_place();
+        let now = chrono::Utc::now().timestamp();
+        let due = force
+            || self.weather.as_ref().is_none_or(|w| w.place != place || w.is_stale(now));
+        let resting = self.weather_failed_at.is_some_and(|at| at.elapsed() < WEATHER_RETRY);
+        if !due || self.weather_fetching || (resting && !force) {
+            return Task::none();
+        }
+        self.weather_fetching = true;
+        Task::future(async move {
+            let Some(lock) = weather::FetchLock::take() else {
+                return cosmic::action::app(Message::WeatherFetched(None, false));
+            };
+            let fetched = weather::fetch(place).await;
+            drop(lock);
+            cosmic::action::app(Message::WeatherFetched(fetched.map(Box::new), true))
+        })
     }
 
     /// Whether this part of an item was past its limit lately.
@@ -500,13 +557,18 @@ impl cosmic::Application for Monitor {
             ..Self::default()
         };
         // COSMIC_MONITOR_PREVIEW=1 opens the popup by itself, for screenshots;
-        // =edit, on the arranging. COSMIC_QS_PREVIEW_OUTPUT=DP-3 keeps it to
+        // =edit, on the arranging; =place, on choosing the weather's place. COSMIC_QS_PREVIEW_OUTPUT=DP-3 keeps it to
         // the panel on that screen.
         let on_output = std::env::var("COSMIC_QS_PREVIEW_OUTPUT").map_or(true, |output| {
             std::env::var("COSMIC_PANEL_OUTPUT").is_ok_and(|panel| panel == output)
         });
         let preview = std::env::var("COSMIC_MONITOR_PREVIEW").ok().filter(|_| on_output);
         monitor.editing = preview.as_deref() == Some("edit");
+        // =place, on choosing where the weather is, "Curitiba" searched.
+        if preview.as_deref() == Some("place") {
+            monitor.place_editing = true;
+            monitor.place_input = "Curitiba".into();
+        }
         let task = match preview {
             Some(_) => Task::batch([
                 monitor.read(),
@@ -517,7 +579,13 @@ impl cosmic::Application for Monitor {
             ]),
             None => monitor.read(),
         };
-        (monitor, task)
+        let weather = monitor.weather_tick(false);
+        let search = if monitor.place_editing {
+            Task::future(async { cosmic::action::app(Message::SearchPlace) })
+        } else {
+            Task::none()
+        };
+        (monitor, Task::batch([task, weather, search]))
     }
 
     fn core(&self) -> &app::Core {
@@ -560,8 +628,10 @@ impl cosmic::Application for Monitor {
                     },
                     None,
                 ));
-                // Fresh numbers, and the processes, at once.
-                return Task::batch([open, self.read()]);
+                // Fresh numbers, and the processes, at once; the weather,
+                // if it's old.
+                let weather = self.weather_tick(false);
+                return Task::batch([open, self.read(), weather]);
             }
             Message::PanelPress(id) => {
                 let just_closed = self.closed_at.is_some_and(|at| at.elapsed() < Duration::from_millis(250));
@@ -654,6 +724,50 @@ impl cosmic::Application for Monitor {
                 }
                 return self.read();
             }
+            Message::WeatherTick => return self.weather_tick(false),
+            Message::WeatherFetched(fetched, tried) => {
+                self.weather_fetching = false;
+                match fetched {
+                    Some(fetched) => {
+                        self.weather = Some(*fetched);
+                        self.weather_seen = weather::modified();
+                        self.weather_failed_at = None;
+                    }
+                    None if tried => self.weather_failed_at = Some(Instant::now()),
+                    // Another applet is at it: its file, at the next tick.
+                    None => {}
+                }
+            }
+            Message::ToggleWeatherExpanded => self.settings.toggle_weather_expanded(),
+            Message::EditPlace(editing) => {
+                self.place_editing = editing;
+                self.place_input.clear();
+                self.place_results = None;
+                self.place_searching = false;
+            }
+            Message::PlaceInput(text) => self.place_input = text,
+            Message::SearchPlace => {
+                let query = self.place_input.trim().to_owned();
+                if query.is_empty() || self.place_searching {
+                    return Task::none();
+                }
+                self.place_searching = true;
+                return Task::future(async move {
+                    cosmic::action::app(Message::PlacesFound(weather::place::search(query).await))
+                });
+            }
+            Message::PlacesFound(places) => {
+                self.place_searching = false;
+                self.place_results = Some(places);
+            }
+            Message::PickPlace(place) => {
+                config::set_weather_place(&place);
+                self.place_editing = false;
+                self.place_results = None;
+                self.place_input.clear();
+                self.weather_failed_at = None;
+                return self.weather_tick(true);
+            }
             Message::None => {}
         }
         Task::none()
@@ -665,6 +779,7 @@ impl cosmic::Application for Monitor {
         let every = if self.popup.is_some() { Duration::from_secs(1) } else { Duration::from_secs(5) };
         Subscription::batch([
             iced::time::every(every).map(|_| Message::Tick),
+            iced::time::every(WEATHER_TICK).map(|_| Message::WeatherTick),
             event::listen_with(|event, _, _| {
                 use iced::event::wayland::{Event as Wayland, OutputEvent};
                 match event {
@@ -778,6 +893,47 @@ impl cosmic::Application for Monitor {
                 parts
             };
             match bar_item {
+                BarItem::Weather => {
+                    if let Some(weather) = &self.weather {
+                        let light = weather.light(chrono::Utc::now().timestamp());
+                        let icon = weather::scene::Icon {
+                            sky: weather.now.sky,
+                            day: light.time != weather::scene::Time::Night,
+                            size: f32::from(size),
+                            moving: false,
+                            on_panel: true,
+                            moon: light.moon,
+                            south: light.south,
+                        }
+                        .view();
+                        let temp = format!("{:.0}°", weather.now.temp);
+                        let one_line = iced::widget::text::Wrapping::None;
+                        items.push(if horizontal {
+                            widget::row::with_children(vec![
+                                icon,
+                                iced::widget::stack(vec![
+                                    applet
+                                        .text("-00°")
+                                        .wrapping(one_line)
+                                        .class(theme::Text::Color(iced::Color::TRANSPARENT))
+                                        .into(),
+                                    applet.text(temp).wrapping(one_line).into(),
+                                ])
+                                .into(),
+                            ])
+                            .spacing(4)
+                            .align_y(Alignment::Center)
+                            .into()
+                        } else {
+                            widget::column::with_children(vec![
+                                icon,
+                                widget::text::caption(temp).wrapping(one_line).into(),
+                            ])
+                            .align_x(Alignment::Center)
+                            .into()
+                        });
+                    }
+                }
                 BarItem::Cpu => items.push(item(
                     panels::icon_cpu(),
                     chart::Hue::Cpu,
