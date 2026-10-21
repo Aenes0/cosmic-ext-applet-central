@@ -2277,9 +2277,38 @@ impl cosmic::Application for StartButton {
     }
 
     fn update(&mut self, (): ()) -> app::Task<()> {
-        if let Ok(exe) = std::env::current_exe() {
-            crate::host::spawn(&exe.to_string_lossy(), &["--start"]);
-        }
+        // The menu running answers over D-Bus; else it starts, apart from
+        // the panel: not on the applet's own Wayland socket, which the
+        // panel passes down (WAYLAND_SOCKET), but on the compositor's.
+        std::thread::spawn(|| {
+            if toggle_running() {
+                return;
+            }
+            let Ok(exe) = std::env::current_exe() else { return };
+            let mut command = std::process::Command::new(exe);
+            command.arg("--start");
+            for (key, _) in std::env::vars_os() {
+                let key_str = key.to_string_lossy();
+                if key_str == "WAYLAND_SOCKET"
+                    || key_str == "X_PRIVILEGED_WAYLAND_SOCKET"
+                    || key_str.starts_with("COSMIC_PANEL_")
+                {
+                    command.env_remove(&key);
+                }
+            }
+            // Its own session, to outlive the applet.
+            unsafe {
+                use std::os::unix::process::CommandExt;
+                command.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+            match command.spawn() {
+                Ok(mut child) => _ = child.wait(),
+                Err(err) => tracing::error!("cannot start the start menu: {err}"),
+            }
+        });
         Task::none()
     }
 
