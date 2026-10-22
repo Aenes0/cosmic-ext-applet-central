@@ -23,8 +23,12 @@ install -Dm0644 "data/icons/scalable/apps/$id.svg" "$prefix/share/icons/hicolor/
 mkdir -p "$prefix/share/systemd/user" "$prefix/share/dbus-1/services"
 sed "s|@bindir@|$prefix/bin|" "data/central-clipboard.service.in" > "$prefix/share/systemd/user/central-clipboard.service"
 sed "s|@bindir@|$prefix/bin|" "data/io.github.Aenes0.CosmicCentral.Clipboard.service.in" > "$prefix/share/dbus-1/services/io.github.Aenes0.CosmicCentral.Clipboard.service"
+# So is the notifications' history.
+sed "s|@bindir@|$prefix/bin|" "data/central-notifications.service.in" > "$prefix/share/systemd/user/central-notifications.service"
+sed "s|@bindir@|$prefix/bin|" "data/io.github.Aenes0.CosmicCentral.Notifications.service.in" > "$prefix/share/dbus-1/services/io.github.Aenes0.CosmicCentral.Notifications.service"
 # Only a plain ~/.local install enables the unit here; Flatpak builds and system prefixes leave that to the packager.
 if [ "$prefix" = "$HOME/.local" ] && [ ! -f /.flatpak-info ]; then
     systemctl --user daemon-reload && systemctl --user enable central-clipboard.service && systemctl --user restart central-clipboard.service || true
+    systemctl --user enable central-notifications.service && systemctl --user restart central-notifications.service || true
 fi
 echo "Installed. Add \"Central\" in Settings > Desktop > Panel > Applets."
