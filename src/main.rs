@@ -54,5 +54,9 @@ fn main() -> cosmic::iced::Result {
     if std::env::args().any(|arg| arg == "--tray") {
         return tray::run();
     }
+    // And the clipboard's history, a service of its own.
+    if std::env::args().any(|arg| arg == "--clipboard") {
+        clipboard::service::main()
+    }
     cosmic::applet::run::<app::App>(())
 }

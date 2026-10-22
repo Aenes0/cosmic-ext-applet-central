@@ -1,0 +1,14 @@
+[Unit]
+Description=Central: histórico da área de transferência
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.Aenes0.CosmicCentral.Clipboard
+ExecStart=@bindir@/cosmic-ext-applet-central --clipboard
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

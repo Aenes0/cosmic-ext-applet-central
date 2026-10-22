@@ -124,9 +124,11 @@ pub enum Message {
     CalendarToday,
     /// Every few seconds, for the clock on the bar.
     ClockTick,
-    Clipboard(crate::clipboard::Event),
+    /// The clipboard service says the history changed (or an action it was
+    /// asked for is done): read the file again.
+    ClipboardChanged,
     /// An entry of the clipboard's history, by id: copied again; pinned or
-    /// not; deleted. All but the pinned, cleared.
+    /// not; deleted. All but the pinned, cleared. Asked of the service.
     CopyEntry(u64),
     PinEntry(u64),
     DeleteEntry(u64),
@@ -324,7 +326,6 @@ pub struct App {
     pub(crate) resizing: Option<(usize, Fit)>,
     /// What was copied, newest first.
     pub(crate) clipboard: Vec<crate::clipboard::Entry>,
-    clipboard_tx: Option<cosmic::cctk::sctk::reexports::calloop::channel::Sender<crate::clipboard::Request>>,
     /// The month the calendar shows.
     pub(crate) calendar_month: crate::calendar::Month,
     /// The clock's lines as last drawn: time and date.
@@ -580,6 +581,14 @@ pub fn duration(seconds: i64) -> String {
     }
 }
 
+/// Asks the clipboard service for something, then reads the history again.
+fn clipboard_ask(action: crate::clipboard::Action) -> app::Task<Message> {
+    Task::future(async move {
+        crate::clipboard::ask(action).await;
+        cosmic::action::app(Message::ClipboardChanged)
+    })
+}
+
 fn load_wifi(scan: bool, delay: Duration) -> app::Task<Message> {
     Task::future(async move {
         if scan {
@@ -681,7 +690,6 @@ impl cosmic::Application for App {
     const APP_ID: &'static str = crate::APP_ID;
 
     fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
-        crate::clipboard::make_missing_thumbnails();
         let tiles = load_tiles();
         // COSMIC_QS_PREVIEW_SELECT=4 picks that item while editing, to see
         // its sizes and handle.
@@ -911,21 +919,11 @@ impl cosmic::Application for App {
             Message::CalendarShift(by) => self.calendar_month = self.calendar_month.shift(by),
             Message::CalendarToday => self.calendar_month = crate::calendar::Month::now(),
             Message::ClockTick => self.clock = crate::calendar::bar_lines(),
-            Message::Clipboard(event) => match event {
-                crate::clipboard::Event::Ready(tx) => self.clipboard_tx = Some(tx),
-                crate::clipboard::Event::History(entries) => self.clipboard = entries,
-            },
-            Message::CopyEntry(id) => {
-                if let (Some(tx), Some(entry)) =
-                    (&self.clipboard_tx, self.clipboard.iter().find(|e| e.id == id))
-                {
-                    _ = tx.send(crate::clipboard::Request::Copy(entry.clone()));
-                    self.clipboard = crate::clipboard::touch(id);
-                }
-            }
-            Message::PinEntry(id) => self.clipboard = crate::clipboard::pin(id),
-            Message::DeleteEntry(id) => self.clipboard = crate::clipboard::remove(id),
-            Message::ClearClipboard => self.clipboard = crate::clipboard::clear(),
+            Message::ClipboardChanged => self.clipboard = crate::clipboard::load(),
+            Message::CopyEntry(id) => return clipboard_ask(crate::clipboard::Action::Copy(id)),
+            Message::PinEntry(id) => return clipboard_ask(crate::clipboard::Action::Pin(id)),
+            Message::DeleteEntry(id) => return clipboard_ask(crate::clipboard::Action::Remove(id)),
+            Message::ClearClipboard => return clipboard_ask(crate::clipboard::Action::Clear),
             Message::AddStructure(kind, bubble) => {
                 let mut trial = self.tiles.clone();
                 trial.insert(self.insert_at(bubble, kind), Placed::new(kind));
@@ -1738,7 +1736,7 @@ impl cosmic::Application for App {
             media::subscription().map(Message::Media),
             audio::privacy_subscription().map(Message::Privacy),
             notifications::subscription().map(Message::Notification),
-            crate::clipboard::subscription().map(Message::Clipboard),
+            crate::clipboard::subscription().map(|()| Message::ClipboardChanged),
         ];
         // The screen's size, for the popup's height.
         subscriptions.push(event::listen_with(|event, _, _| {
