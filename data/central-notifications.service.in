@@ -1,0 +1,14 @@
+[Unit]
+Description=Central: histórico de notificações
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.Aenes0.CosmicCentral.Notifications
+ExecStart=@bindir@/cosmic-ext-applet-central --notifications
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

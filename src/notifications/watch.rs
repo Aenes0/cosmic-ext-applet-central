@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Notifications, as apps send them to the daemon.
+//! The bus side of the notifications, used by the service alone.
 //!
 //! They're seen on the session bus, as `dbus-monitor` sees them: the
 //! `Notify` calls, and the daemon's answers with their ids. Not through the
@@ -10,123 +10,27 @@
 //! applet was gone from the bar. Dismissed and opened ones, through the usual
 //! `org.freedesktop.Notifications` signals. Passing ones (`transient`, or the
 //! daemon's `osd` pills) stay out of the history.
-//!
-//! Actions run through the daemon's `InvokeAction` method on the session bus,
-//! not through that socket either.
 
 use std::{
     collections::{HashMap, HashSet},
     time::SystemTime,
 };
 
-use cosmic::iced::{Subscription, stream};
-use futures::{SinkExt, StreamExt, channel::mpsc};
+use futures::StreamExt;
 use zbus::{connection::Builder, zvariant::Value};
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Notification {
-    pub id: u32,
-    pub app: String,
-    pub icon: String,
-    pub summary: String,
-    pub body: String,
-    /// Pairs of action key and label.
-    pub actions: Vec<(String, String)>,
-    pub time: SystemTime,
-    /// Kept from before the applet started: the daemon has forgotten it, and
-    /// its id may be another's now.
-    #[serde(default)]
-    pub restored: bool,
-}
-
-fn history_file() -> Option<std::path::PathBuf> {
-    let dir = std::env::var_os("XDG_STATE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
-        })?;
-    Some(dir.join(crate::APP_ID).join("notifications.json"))
-}
-
-/// The notifications kept from the last run.
-pub fn load() -> Vec<Notification> {
-    let Some(file) = history_file() else {
-        return Vec::new();
-    };
-    let Ok(data) = std::fs::read(file) else {
-        return Vec::new();
-    };
-    let mut notifications: Vec<Notification> = serde_json::from_slice(&data).unwrap_or_default();
-    for notification in &mut notifications {
-        notification.restored = true;
-        notification.actions.clear();
-        // Kept before icons came from the apps' entries, or a file since gone.
-        notification.icon = app_icon(&notification.app, None, &notification.icon, None);
-        notification.body = plain(&notification.body);
-    }
-    notifications
-}
-
-pub fn save(notifications: &[Notification]) {
-    let Some(file) = history_file() else {
-        return;
-    };
-    let result = file
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            let data = serde_json::to_vec(notifications).map_err(std::io::Error::other)?;
-            std::fs::write(&file, data)
-        });
-    if let Err(err) = result {
-        tracing::warn!("cannot keep the notifications: {err}");
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum Event {
-    New(Notification),
-    /// Gone: opened, or closed by its app or from here.
-    Closed(u32),
-    /// Its popup closed by hand. It stays, as a heads-up swiped away on
-    /// Android does, but the daemon has let go of it.
-    Dismissed(u32),
-}
+use super::{Event, Notification};
 
 /// `NotificationClosed`'s reason when the user closed it.
 const DISMISSED_BY_USER: u32 = 2;
-
-/// The daemon's own interface, on its usual name: actions run from here,
-/// even of notifications whose popup has gone.
-#[zbus::proxy(
-    default_service = "org.freedesktop.Notifications",
-    interface = "com.system76.NotificationsApplet",
-    default_path = "/com/system76/NotificationsApplet"
-)]
-trait NotificationsApplet {
-    fn invoke_action(&self, id: u32, action: &str) -> zbus::Result<()>;
-}
-
-#[zbus::proxy(
-    default_service = "org.freedesktop.Notifications",
-    interface = "org.freedesktop.Notifications",
-    default_path = "/org/freedesktop/Notifications"
-)]
-trait Notifications {
-    fn close_notification(&self, id: u32) -> zbus::Result<()>;
-
-    #[zbus(signal)]
-    fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
-
-    #[zbus(signal)]
-    fn action_invoked(&self, id: u32, action_key: &str) -> zbus::Result<()>;
-}
 
 /// What the daemon and the bus tell, before it makes an event.
 enum Signal {
     New(Notification),
     Invoked(u32),
     Closed(u32, u32),
+    /// The daemon's name changed hands.
+    Reset,
 }
 
 /// Passing ones, kept out of the history: `transient` (true, or a number
@@ -149,11 +53,31 @@ fn skip_in_history(hints: &HashMap<String, zbus::zvariant::OwnedValue>) -> bool 
     transient || osd
 }
 
-/// New notifications, seen on the session bus as a monitor: each `Notify`
-/// call, made whole by the daemon's answer, which gives its id. Only those
-/// calls and the daemon's answers are seen, a few messages a notification.
-async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>> {
-    let conn = Builder::session()?.build().await?;
+/// The longest an app's text is kept, in characters: a message on the bus can
+/// be far larger, and the history is read by every applet at each change.
+const SHORT: usize = 256;
+const BODY: usize = 4096;
+/// The most buttons a notification keeps.
+const ACTIONS: usize = 8;
+
+/// At most `max` characters.
+fn cap(text: String, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => text[..end].to_owned(),
+        None => text,
+    }
+}
+
+/// What the session bus tells about the notifications, seen as a monitor, in
+/// the order the bus delivered it: each `Notify` call, made whole by the
+/// daemon's answer, which gives its id; the daemon's `NotificationClosed` and
+/// `ActionInvoked`; and the daemon's name changing hands. One connection, so
+/// a notification and its closing can't be told out of order. Ends when the
+/// connection does.
+async fn bus_signals(
+    builder: Builder<'_>,
+) -> zbus::Result<impl futures::Stream<Item = Signal> + use<>> {
+    let conn = builder.build().await?;
     zbus::fdo::MonitoringProxy::new(&conn)
         .await?
         .become_monitor(
@@ -161,6 +85,10 @@ async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>
                 "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"
                     .try_into()?,
                 "type='method_return',sender='org.freedesktop.Notifications'".try_into()?,
+                "type='signal',sender='org.freedesktop.Notifications',interface='org.freedesktop.Notifications'"
+                    .try_into()?,
+                "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.freedesktop.Notifications'"
+                    .try_into()?,
             ],
             0,
         )
@@ -179,7 +107,13 @@ async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>
     let mut waiting: HashMap<(String, u32), Notification> = HashMap::new();
     Ok(zbus::MessageStream::from(conn).filter_map(move |message| {
         let signal = (|| {
-            let message = message.ok()?;
+            let message = match message {
+                Ok(message) => message,
+                Err(err) => {
+                    tracing::warn!("a message on the bus wasn't read: {err}");
+                    return None;
+                }
+            };
             let header = message.header();
             match header.message_type() {
                 zbus::message::Type::MethodCall => {
@@ -199,18 +133,20 @@ async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>
                             &icon,
                             hint("image-path").as_deref(),
                         ),
-                        app,
-                        summary,
-                        body: plain(&body),
+                        app: cap(app, SHORT),
+                        summary: cap(summary, SHORT),
+                        body: cap(plain(&body), BODY),
                         actions: actions
                             .chunks(2)
                             .filter_map(|pair| match pair {
-                                [key, label] => Some((key.clone(), label.clone())),
+                                [key, label] => Some((cap(key.clone(), SHORT), cap(label.clone(), SHORT))),
                                 _ => None,
                             })
+                            .take(ACTIONS)
                             .collect(),
                         time: SystemTime::now(),
                         restored: false,
+                        seen: false,
                     };
                     let caller = header.sender()?.to_string();
                     // Not answered for long: the daemon's gone, say.
@@ -227,6 +163,26 @@ async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>
                     notification.id = message.body().deserialize::<u32>().ok()?;
                     Some(Signal::New(notification))
                 }
+                zbus::message::Type::Signal => {
+                    let interface = header.interface()?.as_str();
+                    let member = header.member()?.as_str();
+                    match (interface, member) {
+                        ("org.freedesktop.Notifications", "NotificationClosed") => {
+                            let (id, reason): (u32, u32) = message.body().deserialize().ok()?;
+                            Some(Signal::Closed(id, reason))
+                        }
+                        ("org.freedesktop.Notifications", "ActionInvoked") => {
+                            let (id, _): (u32, String) = message.body().deserialize().ok()?;
+                            Some(Signal::Invoked(id))
+                        }
+                        ("org.freedesktop.DBus", "NameOwnerChanged") => {
+                            // Calls waiting were for the daemon that's gone.
+                            waiting.clear();
+                            Some(Signal::Reset)
+                        }
+                        _ => None,
+                    }
+                }
                 _ => None,
             }
         })();
@@ -234,49 +190,29 @@ async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>
     }))
 }
 
-pub fn subscription() -> Subscription<Event> {
-    Subscription::run_with("notifications", |_| {
-        stream::channel(50, |mut output: mpsc::Sender<Event>| async move {
-            let notify = match bus_notifications().await {
-                Ok(notify) => notify,
-                Err(err) => {
-                    tracing::warn!("cannot watch notifications on the bus: {err}");
-                    return futures::future::pending().await;
-                }
-            };
-            let Ok(session) = zbus::Connection::session().await else {
-                return futures::future::pending().await;
-            };
-            let Ok(freedesktop) = NotificationsProxy::new(&session).await else {
-                return futures::future::pending().await;
-            };
-            let (Ok(closed), Ok(invoked)) = (
-                freedesktop.receive_notification_closed().await,
-                freedesktop.receive_action_invoked().await,
-            ) else {
-                return futures::future::pending().await;
-            };
-            let closed = closed.filter_map(|signal| async move {
-                let args = signal.args().ok()?;
-                Some(Signal::Closed(args.id, args.reason))
-            });
-            let invoked = invoked.filter_map(|signal| async move {
-                Some(Signal::Invoked(signal.args().ok()?.id))
-            });
-            let mut signals =
-                futures::stream::select_all([notify.boxed(), closed.boxed(), invoked.boxed()]);
-            let mut opened = HashSet::new();
-            while let Some(signal) = signals.next().await {
-                let Some(event) = event(&mut opened, signal) else {
-                    continue;
-                };
-                if output.send(event).await.is_err() {
-                    return;
-                }
-            }
-            futures::future::pending().await
-        })
-    })
+/// The events of the notifications, as they happen. An error when the
+/// watching can't be set up; the stream ends if the bus does.
+pub async fn events() -> zbus::Result<impl futures::Stream<Item = Event>> {
+    events_on(Builder::session()?).await
+}
+
+/// `events`, on the bus the builder is for.
+async fn events_on(builder: Builder<'_>) -> zbus::Result<impl futures::Stream<Item = Event>> {
+    let signals = bus_signals(builder).await?;
+    let mut opened = HashSet::new();
+    Ok(signals.filter_map(move |signal| {
+        let event = event(&mut opened, signal);
+        async move { event }
+    }))
+}
+
+/// Kept from before icons came from the apps' entries, or a file since gone:
+/// the icon and the body, as they'd be made now.
+pub fn tidy(list: &mut [Notification]) {
+    for notification in list {
+        notification.icon = app_icon(&notification.app, None, &notification.icon, None);
+        notification.body = plain(&notification.body);
+    }
 }
 
 /// What a signal means here. A click on a popup runs its action, then
@@ -292,6 +228,10 @@ fn event(opened: &mut HashSet<u32>, signal: Signal) -> Option<Event> {
         Signal::Closed(id, _) => {
             opened.remove(&id);
             Event::Closed(id)
+        }
+        Signal::Reset => {
+            opened.clear();
+            Event::Reset
         }
     })
 }
@@ -441,32 +381,6 @@ fn plain(body: &str) -> String {
         .to_owned()
 }
 
-/// Run an action, `default` being a click on the notification.
-pub async fn invoke(id: u32, action: String) {
-    let result = async {
-        let session = zbus::Connection::session().await?;
-        NotificationsAppletProxy::new(&session)
-            .await?
-            .invoke_action(id, &action)
-            .await
-    };
-    if let Err(err) = result.await {
-        tracing::warn!("cannot run notification action: {err}");
-    }
-}
-
-pub async fn dismiss(ids: Vec<u32>) {
-    let Ok(session) = zbus::Connection::session().await else {
-        return;
-    };
-    let Ok(proxy) = NotificationsProxy::new(&session).await else {
-        return;
-    };
-    for id in ids {
-        _ = proxy.close_notification(id).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +430,129 @@ mod tests {
     fn sent_icon() {
         assert_eq!(app_icon("", None, "dialog-information", None), "dialog-information");
         assert_eq!(app_icon("", None, "file:///nowhere/logo.png", None), "");
+    }
+
+    #[test]
+    fn tidy_reads_markup_and_drops_gone_icons() {
+        let mut list = vec![Notification {
+            id: 1,
+            app: String::new(),
+            icon: "file:///nowhere/logo.png".into(),
+            summary: "s".into(),
+            body: "<b>hi</b> &amp; bye".into(),
+            actions: Vec::new(),
+            time: SystemTime::UNIX_EPOCH,
+            restored: true,
+            seen: true,
+        }];
+        tidy(&mut list);
+        assert_eq!(list[0].icon, "");
+        assert_eq!(list[0].body, "hi & bye");
+    }
+
+    #[test]
+    fn a_new_daemon_forgets_the_clicks() {
+        let mut opened = HashSet::new();
+        assert!(event(&mut opened, Signal::Invoked(5)).is_none());
+        assert!(matches!(event(&mut opened, Signal::Reset), Some(Event::Reset)));
+        // The click was on the old daemon's id 5.
+        assert!(matches!(event(&mut opened, Signal::Closed(5, 2)), Some(Event::Dismissed(5))));
+    }
+
+    #[test]
+    fn long_text_is_cut_on_a_character() {
+        assert_eq!(cap("abc".to_owned(), 5), "abc");
+        assert_eq!(cap("abcdef".to_owned(), 3), "abc");
+        assert_eq!(cap("ááááá".to_owned(), 2), "áá");
+        assert_eq!(cap(String::new(), 0), "");
+    }
+
+    /// A stand-in for the daemon, on the test bus.
+    struct Daemon;
+
+    #[zbus::interface(name = "org.freedesktop.Notifications")]
+    impl Daemon {
+        #[allow(clippy::too_many_arguments)]
+        fn notify(
+            &self,
+            _app: String,
+            _replaces: u32,
+            _icon: String,
+            _summary: String,
+            _body: String,
+            _actions: Vec<String>,
+            _hints: HashMap<String, zbus::zvariant::OwnedValue>,
+            _timeout: i32,
+        ) -> u32 {
+            7
+        }
+
+        #[zbus(signal)]
+        async fn notification_closed(
+            emitter: &zbus::object_server::SignalEmitter<'_>,
+            id: u32,
+            reason: u32,
+        ) -> zbus::Result<()>;
+    }
+
+    async fn next(events: &mut (impl futures::Stream<Item = Event> + Unpin)) -> Event {
+        tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
+            .await
+            .expect("no event")
+            .expect("events ended")
+    }
+
+    async fn daemon(address: &str) -> zbus::Connection {
+        Builder::address(address)
+            .unwrap()
+            .name("org.freedesktop.Notifications")
+            .unwrap()
+            .serve_at("/org/freedesktop/Notifications", Daemon)
+            .unwrap()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_bus_gives_a_notification_its_closing_and_a_new_daemon() {
+        let Some(bus) = super::super::service::testbus::Bus::start() else {
+            eprintln!("skipped: no dbus-daemon");
+            return;
+        };
+        let first = daemon(bus.address()).await;
+        let mut events = Box::pin(events_on(Builder::address(bus.address()).unwrap()).await.unwrap());
+        let app = Builder::address(bus.address()).unwrap().build().await.unwrap();
+
+        let id: u32 = app
+            .call_method(
+                Some("org.freedesktop.Notifications"),
+                "/org/freedesktop/Notifications",
+                Some("org.freedesktop.Notifications"),
+                "Notify",
+                &("app", 0u32, "", "hello", "<b>body</b>", Vec::<String>::new(), HashMap::<String, Value<'_>>::new(), -1i32),
+            )
+            .await
+            .unwrap()
+            .body()
+            .deserialize()
+            .unwrap();
+        assert_eq!(id, 7);
+        match next(&mut events).await {
+            Event::New(n) => assert_eq!((n.id, n.summary.as_str(), n.body.as_str()), (7, "hello", "body")),
+            other => panic!("{other:?}"),
+        }
+
+        first
+            .emit_signal(None::<&str>, "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed", &(7u32, 3u32))
+            .await
+            .unwrap();
+        assert!(matches!(next(&mut events).await, Event::Closed(7)));
+
+        // The daemon is replaced: its name changes hands.
+        drop(first);
+        assert!(matches!(next(&mut events).await, Event::Reset));
+        let _second = daemon(bus.address()).await;
+        assert!(matches!(next(&mut events).await, Event::Reset));
     }
 }

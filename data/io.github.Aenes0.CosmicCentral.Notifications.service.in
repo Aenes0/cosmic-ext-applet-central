@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.Aenes0.CosmicCentral.Notifications
+Exec=@bindir@/cosmic-ext-applet-central --notifications
+SystemdService=central-notifications.service

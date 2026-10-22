@@ -209,7 +209,8 @@ pub enum Message {
     SeekDone,
     /// Every second while something plays, for the progress bar.
     Tick,
-    Notification(notifications::Event),
+    /// The notifications service wrote the history down: read it again.
+    NotificationsChanged,
     OpenNotification(NotificationKey),
     DismissNotification(NotificationKey),
     NotificationAction(u32, String),
@@ -303,8 +304,6 @@ pub struct App {
     pub(crate) seeking: Option<f32>,
     /// Newest first.
     pub(crate) notifications: Vec<Notification>,
-    /// The notifications shown in a popup since closed: the others are new.
-    pub(crate) seen: std::collections::HashSet<u32>,
     pub(crate) brightness: Option<(i32, i32)>,
     pub(crate) power: Option<PowerProfiles>,
     pub(crate) do_not_disturb: bool,
@@ -387,7 +386,7 @@ impl App {
 
     /// Whether a notification came since the popup was last open.
     pub(crate) fn is_new(&self, notification: &Notification) -> bool {
-        !notification.restored && !self.seen.contains(&notification.id)
+        !notification.restored && !notification.seen
     }
 
     /// The player shown: the one picked, else the first, playing.
@@ -398,9 +397,10 @@ impl App {
             .or(self.media.first())
     }
 
-    fn remove_notification(&mut self, key: NotificationKey) {
-        self.notifications.retain(|n| (n.id, n.restored) != key);
-        notifications::save(&self.notifications);
+    /// Out of the list at once; the service forgets it for every applet.
+    fn remove_notification(&mut self, key: NotificationKey) -> app::Task<Message> {
+        notifications::remove(&mut self.notifications, key.0, key.1);
+        notifications_ask(notifications::Action::Remove(key.0, key.1))
     }
 
     pub(crate) fn new_count(&self) -> usize {
@@ -426,23 +426,24 @@ impl App {
     }
 
     fn close_popup(&mut self) -> app::Task<Message> {
-        self.mark_seen();
+        let seen = self.mark_seen();
         self.leave_edit(false);
         self.page = None;
-        match self.popup.take() {
+        let destroy = match self.popup.take() {
             Some(id) => destroy_popup(id),
             None => Task::none(),
-        }
+        };
+        Task::batch([seen, destroy])
     }
 
-    fn mark_seen(&mut self) {
-        self.seen = self
-            .notifications
-            .iter()
-            .filter(|n| !n.restored)
-            .map(|n| n.id)
-            .collect();
+    /// Everything shown counts as seen; the service is told if anything was new.
+    fn mark_seen(&mut self) -> app::Task<Message> {
         self.media_outputs = false;
+        if !self.notifications.iter().any(|n| !n.restored && !n.seen) {
+            return Task::none();
+        }
+        notifications::mark_seen(&mut self.notifications);
+        notifications_ask(notifications::Action::Seen)
     }
 
     /// Out of editing: keeping what was arranged, or back to how it was.
@@ -579,6 +580,29 @@ pub fn duration(seconds: i64) -> String {
         (h, 0) => format!("{h} h"),
         (h, m) => format!("{h} h {m} min"),
     }
+}
+
+/// Asks the notifications service for something, then reads the history again.
+fn notifications_ask(action: notifications::Action) -> app::Task<Message> {
+    Task::future(async move {
+        notifications::ask(action).await;
+        cosmic::action::app(Message::NotificationsChanged)
+    })
+}
+
+/// A live notification leaves the history first, then the action runs (if
+/// any) and the daemon closes it. The other way round, the daemon's closing
+/// could reach the service before the removal, and keep it there as a swiped
+/// away one.
+fn close_live(id: u32, action: Option<String>) -> app::Task<Message> {
+    Task::future(async move {
+        notifications::ask(notifications::Action::Remove(id, false)).await;
+        if let Some(action) = action {
+            notifications::invoke(id, action).await;
+        }
+        notifications::dismiss(vec![id]).await;
+        cosmic::action::app(Message::NotificationsChanged)
+    })
 }
 
 /// Asks the clipboard service for something, then reads the history again.
@@ -894,10 +918,11 @@ impl cosmic::Application for App {
             Message::Closed(id) => {
                 if self.popup == Some(id) {
                     self.closed_at = Some(std::time::Instant::now());
-                    self.mark_seen();
+                    let seen = self.mark_seen();
                     self.leave_edit(false);
                     self.popup = None;
                     self.page = None;
+                    return seen;
                 }
             }
             Message::ShowPage(page) => {
@@ -1451,59 +1476,27 @@ impl cosmic::Application for App {
                 }
             }
             Message::Tick => {}
-            Message::Notification(event) => match event {
-                notifications::Event::New(notification) => {
-                    // A notification replacing another keeps its id, and is new.
-                    self.notifications.retain(|n| n.restored || n.id != notification.id);
-                    self.seen.remove(&notification.id);
-                    self.notifications.insert(0, notification);
-                    notifications::save(&self.notifications);
-                }
-                notifications::Event::Closed(id) => self.remove_notification((id, false)),
-                notifications::Event::Dismissed(id) => {
-                    if let Some(notification) =
-                        self.notifications.iter_mut().find(|n| !n.restored && n.id == id)
-                    {
-                        notification.restored = true;
-                        notification.actions.clear();
-                        notifications::save(&self.notifications);
-                    }
-                }
-            },
+            Message::NotificationsChanged => self.notifications = notifications::load(),
             Message::OpenNotification(key) => {
-                self.remove_notification(key);
                 let (id, restored) = key;
                 if restored {
-                    return Task::none();
+                    return self.remove_notification(key);
                 }
+                notifications::remove(&mut self.notifications, id, false);
                 let close = self.close_popup();
-                return Task::batch([
-                    close,
-                    Task::future(async move {
-                        notifications::invoke(id, "default".to_owned()).await;
-                        notifications::dismiss(vec![id]).await;
-                        cosmic::action::app(Message::None)
-                    }),
-                ]);
+                return Task::batch([close, close_live(id, Some("default".to_owned()))]);
             }
             Message::DismissNotification(key) => {
-                self.remove_notification(key);
                 let (id, restored) = key;
                 if restored {
-                    return Task::none();
+                    return self.remove_notification(key);
                 }
-                return Task::future(async move {
-                    notifications::dismiss(vec![id]).await;
-                    cosmic::action::app(Message::None)
-                });
+                notifications::remove(&mut self.notifications, id, false);
+                return close_live(id, None);
             }
             Message::NotificationAction(id, action) => {
-                self.remove_notification((id, false));
-                return Task::future(async move {
-                    notifications::invoke(id, action).await;
-                    notifications::dismiss(vec![id]).await;
-                    cosmic::action::app(Message::None)
-                });
+                notifications::remove(&mut self.notifications, id, false);
+                return close_live(id, Some(action));
             }
             Message::ToggleGroup(app) => {
                 if !self.expanded.remove(&app) {
@@ -1511,17 +1504,14 @@ impl cosmic::Application for App {
                 }
             }
             Message::ClearNotifications => {
-                let ids: Vec<u32> = self
-                    .notifications
-                    .drain(..)
-                    .filter(|n| !n.restored)
-                    .map(|n| n.id)
-                    .collect();
-                notifications::save(&self.notifications);
-                return Task::future(async move {
-                    notifications::dismiss(ids).await;
-                    cosmic::action::app(Message::None)
-                });
+                let ids = notifications::clear(&mut self.notifications);
+                return Task::batch([
+                    notifications_ask(notifications::Action::Clear),
+                    Task::future(async move {
+                        notifications::dismiss(ids).await;
+                        cosmic::action::app(Message::None)
+                    }),
+                ]);
             }
             Message::SetScale(index, scale) => {
                 let Some(display) = self.displays.as_mut().and_then(|d| d.get_mut(index)) else {
@@ -1738,7 +1728,7 @@ impl cosmic::Application for App {
             cosmic_settings_accessibility_subscription::subscription().map(Message::ScreenReader),
             media::subscription().map(Message::Media),
             audio::privacy_subscription().map(Message::Privacy),
-            notifications::subscription().map(Message::Notification),
+            notifications::subscription().map(|()| Message::NotificationsChanged),
             crate::clipboard::subscription().map(|()| Message::ClipboardChanged),
         ];
         // The screen's size, for the popup's height.

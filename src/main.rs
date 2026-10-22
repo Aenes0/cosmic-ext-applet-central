@@ -58,5 +58,9 @@ fn main() -> cosmic::iced::Result {
     if std::env::args().any(|arg| arg == "--clipboard") {
         clipboard::service::main()
     }
+    // And the notifications' history, another service of its own.
+    if std::env::args().any(|arg| arg == "--notifications") {
+        notifications::service::main()
+    }
     cosmic::applet::run::<app::App>(())
 }
