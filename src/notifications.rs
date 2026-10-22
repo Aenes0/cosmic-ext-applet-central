@@ -8,17 +8,19 @@
 //! panel can't get one from the daemon, which happens after it restarts its
 //! applets a few times, it doesn't start those applets at all, and the whole
 //! applet was gone from the bar. Dismissed and opened ones, through the usual
-//! `org.freedesktop.Notifications` signals.
+//! `org.freedesktop.Notifications` signals. Passing ones (`transient`, or the
+//! daemon's `osd` pills) stay out of the history.
+//!
+//! Actions run through the daemon's `InvokeAction` method on the session bus,
+//! not through that socket either.
 
 use std::{
     collections::{HashMap, HashSet},
-    os::unix::io::{FromRawFd, RawFd},
     time::SystemTime,
 };
 
 use cosmic::iced::{Subscription, stream};
 use futures::{SinkExt, StreamExt, channel::mpsc};
-use tokio::sync::OnceCell;
 use zbus::{connection::Builder, zvariant::Value};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -94,26 +96,15 @@ pub enum Event {
 /// `NotificationClosed`'s reason when the user closed it.
 const DISMISSED_BY_USER: u32 = 2;
 
+/// The daemon's own interface, on its usual name: actions run from here,
+/// even of notifications whose popup has gone.
 #[zbus::proxy(
-    default_service = "com.system76.NotificationsApplet",
+    default_service = "org.freedesktop.Notifications",
     interface = "com.system76.NotificationsApplet",
     default_path = "/com/system76/NotificationsApplet"
 )]
 trait NotificationsApplet {
-    #[zbus(signal)]
-    fn notify(
-        &self,
-        app_name: &str,
-        id: u32,
-        app_icon: &str,
-        summary: &str,
-        body: &str,
-        actions: Vec<&str>,
-        hints: HashMap<&str, Value<'_>>,
-        expire_timeout: i32,
-    ) -> zbus::Result<()>;
-
-    fn invoke_action(&self, id: u32, action: String) -> zbus::Result<()>;
+    fn invoke_action(&self, id: u32, action: &str) -> zbus::Result<()>;
 }
 
 #[zbus::proxy(
@@ -138,20 +129,24 @@ enum Signal {
     Closed(u32, u32),
 }
 
-/// The connection to the daemon, if the panel gave us one.
-async fn daemon() -> Option<NotificationsAppletProxy<'static>> {
-    static DAEMON: OnceCell<Option<NotificationsAppletProxy<'static>>> = OnceCell::const_new();
-    DAEMON
-        .get_or_init(|| async {
-            let fd: RawFd = std::env::var("COSMIC_NOTIFICATIONS").ok()?.parse().ok()?;
-            let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
-            stream.set_nonblocking(true).ok()?;
-            let stream = tokio::net::UnixStream::from_std(stream).ok()?;
-            let conn = Builder::socket(stream).p2p().build().await.ok()?;
-            NotificationsAppletProxy::new(&conn).await.ok()
-        })
-        .await
-        .clone()
+/// Passing ones, kept out of the history: `transient` (true, or a number
+/// other than 0, as some apps send it) or the daemon's `osd` pills.
+fn skip_in_history(hints: &HashMap<String, zbus::zvariant::OwnedValue>) -> bool {
+    let transient = hints.get("transient").is_some_and(|value| match &**value {
+        Value::Bool(b) => *b,
+        Value::U8(n) => *n != 0,
+        Value::I16(n) => *n != 0,
+        Value::U16(n) => *n != 0,
+        Value::I32(n) => *n != 0,
+        Value::U32(n) => *n != 0,
+        Value::I64(n) => *n != 0,
+        Value::U64(n) => *n != 0,
+        _ => false,
+    });
+    let osd = hints
+        .get("x-estilo")
+        .is_some_and(|value| matches!(&**value, Value::Str(s) if s.as_str() == "osd"));
+    transient || osd
 }
 
 /// New notifications, seen on the session bus as a monitor: each `Notify`
@@ -190,6 +185,9 @@ async fn bus_notifications() -> zbus::Result<impl futures::Stream<Item = Signal>
                 zbus::message::Type::MethodCall => {
                     let (app, _, icon, summary, body, actions, hints, _): Notify =
                         message.body().deserialize().ok()?;
+                    if skip_in_history(&hints) {
+                        return None;
+                    }
                     let hint = |key: &str| {
                         hints.get(key).and_then(|v| String::try_from(v.clone()).ok())
                     };
@@ -445,10 +443,15 @@ fn plain(body: &str) -> String {
 
 /// Run an action, `default` being a click on the notification.
 pub async fn invoke(id: u32, action: String) {
-    if let Some(daemon) = daemon().await {
-        if let Err(err) = daemon.invoke_action(id, action).await {
-            tracing::warn!("cannot run notification action: {err}");
-        }
+    let result = async {
+        let session = zbus::Connection::session().await?;
+        NotificationsAppletProxy::new(&session)
+            .await?
+            .invoke_action(id, &action)
+            .await
+    };
+    if let Err(err) = result.await {
+        tracing::warn!("cannot run notification action: {err}");
     }
 }
 
@@ -488,6 +491,25 @@ mod tests {
         assert!(matches!(close(Signal::Closed(2, 2)), Some(Event::Dismissed(2))));
         // Closed by its app: gone.
         assert!(matches!(close(Signal::Closed(3, 3)), Some(Event::Closed(3))));
+    }
+
+    #[test]
+    fn history_skips_transient_and_osd() {
+        fn hints(pairs: &[(&str, Value<'_>)]) -> HashMap<String, zbus::zvariant::OwnedValue> {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.try_to_owned().unwrap()))
+                .collect()
+        }
+        let transient = |value: Value<'static>| hints(&[("transient", value)]);
+        assert!(skip_in_history(&transient(Value::from(true))));
+        assert!(skip_in_history(&transient(Value::from(1i32))));
+        assert!(skip_in_history(&transient(Value::from(1u8))));
+        assert!(!skip_in_history(&transient(Value::from(false))));
+        assert!(!skip_in_history(&transient(Value::from(0i32))));
+        assert!(skip_in_history(&hints(&[("x-estilo", Value::from("osd"))])));
+        assert!(!skip_in_history(&hints(&[("x-estilo", Value::from("cartao"))])));
+        assert!(!skip_in_history(&HashMap::new()));
     }
 
     #[test]
