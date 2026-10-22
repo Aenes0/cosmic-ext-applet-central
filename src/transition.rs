@@ -201,7 +201,7 @@ impl<Message> Widget<Message, cosmic::Theme, cosmic::Renderer> for Transition<'_
                     viewport,
                 );
                 // Fade in: a veil of the popup's own color, thinning out.
-                let mut veil: Color = theme.cosmic().background(theme.transparent).base.into();
+                let mut veil: Color = crate::widgets::panel_base(theme.cosmic());
                 veil.a *= rest;
                 for panel in &panels {
                     renderer.fill_quad(

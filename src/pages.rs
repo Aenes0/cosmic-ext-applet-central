@@ -255,7 +255,7 @@ pub fn panel<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Element<'a, M> {
             let cosmic = theme.cosmic();
             let background = cosmic.background(theme.transparent);
             widget::container::Style {
-                background: Some(Background::Color(background.base.into())),
+                background: Some(Background::Color(crate::widgets::panel_base(cosmic))),
                 text_color: Some(background.on.into()),
                 icon_color: Some(background.on.into()),
                 border: iced::Border {

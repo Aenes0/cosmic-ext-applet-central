@@ -124,8 +124,16 @@ pub fn inherit_colors() -> cosmic::theme::Container<'static> {
 
 /// The colors of a tile, off and on: background, hovered background, and
 /// what's on it.
-/// How solid the cards are on the see-through panel.
+/// How solid the panels and their cards are: only the desktop between the
+/// panels shows through.
 const CARD_ALPHA: f32 = 0.95;
+
+/// A panel's own color: the theme's solid one, as solid as the cards.
+pub fn panel_base(cosmic: &cosmic::cosmic_theme::Theme) -> Color {
+    let mut base: Color = cosmic.background(false).base.into();
+    base.a = CARD_ALPHA;
+    base
+}
 
 /// The cards' colors: the theme's solid ones, a little see-through, so only
 /// the panel behind them is clear.
