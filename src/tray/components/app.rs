@@ -302,6 +302,10 @@ impl cosmic::Application for App {
     const APP_ID: &'static str = crate::tray::APP_ID;
 
     fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Msg>) {
+        let mut core = core;
+        // See-through, but no blur behind: the theme stays transparent while any
+        // kind is set, and only layer surfaces, which there are none of here, blur.
+        core.set_auto_blur(cosmic::core::Auto::System.into());
         let (config_handle, config) =
             match cosmic_config::Config::new(CONFIG_ID, TrayConfig::VERSION) {
                 Ok(handle) => {

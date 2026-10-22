@@ -545,7 +545,10 @@ impl cosmic::Application for Monitor {
     type Flags = ();
     const APP_ID: &'static str = APP_ID;
 
-    fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
+    fn init(mut core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
+        // See-through, but no blur behind: the theme stays transparent while any
+        // kind is set, and only layer surfaces, which there are none of here, blur.
+        core.set_auto_blur(cosmic::core::Auto::System.into());
         let settings = Settings::load();
         let mut monitor = Self {
             core,
