@@ -102,7 +102,7 @@ fn card_container<'a>(
         .padding(12)
         .width(Length::Fill)
         .class(theme::Container::custom(|theme| {
-            let component = &theme.cosmic().background(theme.transparent).component;
+            let component = &crate::widgets::card(theme.cosmic());
             widget::container::Style {
                 background: Some(Background::Color(component.base.into())),
                 text_color: Some(component.on.into()),
@@ -119,7 +119,7 @@ fn card_container<'a>(
 fn card_class() -> theme::Button {
     let style = |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         button::Style {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),
@@ -272,7 +272,7 @@ pub fn panel<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Element<'a, M> {
 /// A round button with an icon, `size` across, like the tiles when off.
 pub(crate) fn circle_button<'a>(icon_name: &str, message: Message, size: f32) -> widget::Button<'a, Message> {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
-        let component = &theme.cosmic().background(theme.transparent).component;
+        let component = &crate::widgets::card(theme.cosmic());
         button::Style {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),
@@ -300,7 +300,7 @@ pub(crate) fn circle_button<'a>(icon_name: &str, message: Message, size: f32) ->
 fn on_card_class() -> theme::Button {
     let style = |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         button::Style {
             background: Some(Background::Color(
                 if hovered { component.pressed } else { component.hover }.into(),
@@ -323,7 +323,7 @@ fn on_card_class() -> theme::Button {
 fn pill_class() -> theme::Button {
     let style = |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         button::Style {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),
@@ -1105,7 +1105,7 @@ impl App {
                 .center(Length::Fixed(56.0))
                 .class(theme::Container::custom(|theme| widget::container::Style {
                     background: Some(Background::Color(
-                        theme.cosmic().background(theme.transparent).component.hover.into(),
+                        crate::widgets::card(theme.cosmic()).hover.into(),
                     )),
                     border: iced::Border {
                         radius: 12.0.into(),

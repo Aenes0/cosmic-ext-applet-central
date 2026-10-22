@@ -777,7 +777,7 @@ impl App {
 fn add_class(open: bool) -> theme::Button {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         button::Style {
             background: Some(iced::Background::Color(if open || hovered {
                 component.hover.into()

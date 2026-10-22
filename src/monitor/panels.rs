@@ -141,7 +141,7 @@ fn stat<'a>(label: &str, value: String, hue: Option<Hue>) -> Element<'a, Message
     .padding([8, 10])
     .width(Length::Fill)
     .class(theme::Container::custom(|theme| {
-        let component = &theme.cosmic().background(theme.transparent).component;
+        let component = &crate::widgets::card(theme.cosmic());
         widget::container::Style {
             background: Some(Background::Color(component.base.into())),
             border: iced::Border { radius: 10.0.into(), ..Default::default() },
@@ -463,7 +463,7 @@ impl Monitor {
                 .padding([8, 10])
                 .width(Length::Fill)
                 .class(theme::Container::custom(|theme| {
-                    let component = &theme.cosmic().background(theme.transparent).component;
+                    let component = &crate::widgets::card(theme.cosmic());
                     widget::container::Style {
                         background: Some(Background::Color(component.base.into())),
                         border: iced::Border { radius: 10.0.into(), ..Default::default() },
@@ -930,7 +930,7 @@ impl Monitor {
                     )
                     .padding([6, 8])
                     .class(theme::Container::custom(|theme| {
-                        let component = &theme.cosmic().background(theme.transparent).component;
+                        let component = &crate::widgets::card(theme.cosmic());
                         widget::container::Style {
                             background: Some(Background::Color(component.base.into())),
                             border: iced::Border { radius: 10.0.into(), ..Default::default() },

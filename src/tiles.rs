@@ -487,7 +487,7 @@ pub fn badge<'a>(icon_name: &str, message: Message) -> Element<'a, Message> {
 pub fn edit_container(selected: bool) -> theme::Container<'static> {
     theme::Container::custom(move |theme| {
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         widget::container::Style {
             background: Some(Background::Color(
                 if selected { component.hover } else { component.base }.into(),
@@ -508,7 +508,7 @@ pub fn edit_container(selected: bool) -> theme::Container<'static> {
 pub fn edit_class(selected: bool) -> theme::Button {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         button::Style {
             background: Some(Background::Color(
                 if hovered { component.hover } else { component.base }.into(),
@@ -690,10 +690,10 @@ pub fn chip_class(on: bool) -> theme::Button {
 fn tile_class(on: bool) -> theme::Button {
     let style = move |hovered: bool, theme: &cosmic::Theme| {
         let cosmic = theme.cosmic();
-        let component = if on {
-            &cosmic.accent_button
+        let component = &if on {
+            cosmic.accent_button.clone()
         } else {
-            &cosmic.background(theme.transparent).component
+            crate::widgets::card(cosmic)
         };
         let radius = Radius::from(cosmic.radius_xl()[0]);
         button::Style {

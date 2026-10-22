@@ -124,12 +124,25 @@ pub fn inherit_colors() -> cosmic::theme::Container<'static> {
 
 /// The colors of a tile, off and on: background, hovered background, and
 /// what's on it.
+/// How solid the cards are on the see-through panel.
+const CARD_ALPHA: f32 = 0.95;
+
+/// The cards' colors: the theme's solid ones, a little see-through, so only
+/// the panel behind them is clear.
+pub fn card(cosmic: &cosmic::cosmic_theme::Theme) -> cosmic::cosmic_theme::Component {
+    let mut component = cosmic.background(false).component.clone();
+    for color in [&mut component.base, &mut component.hover, &mut component.pressed] {
+        color.alpha = CARD_ALPHA;
+    }
+    component
+}
+
 fn tile_colors(theme: &cosmic::Theme, on: bool) -> (Color, Color, Color) {
     let cosmic = theme.cosmic();
-    let component = if on {
-        &cosmic.accent_button
+    let component = &if on {
+        cosmic.accent_button.clone()
     } else {
-        &cosmic.background(theme.transparent).component
+        crate::widgets::card(cosmic)
     };
     (
         component.base.into(),
@@ -755,7 +768,7 @@ impl<Message: Clone> Widget<Message, cosmic::Theme, cosmic::Renderer> for Level<
         let bounds = layout.bounds();
         let state = tree.state.downcast_ref::<LevelState>();
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         let hovered = cursor.is_over(bounds) || state.dragging;
         if self.compact {
             return self.draw_compact(tree, renderer, theme, style, layout, cursor, viewport, hovered);
@@ -888,7 +901,7 @@ impl<Message> Level<'_, Message> {
     ) {
         let bounds = layout.bounds();
         let cosmic = theme.cosmic();
-        let component = &cosmic.background(theme.transparent).component;
+        let component = &crate::widgets::card(cosmic);
         let side = bounds.height;
         // Round behind the icon, lighter when hovered, as the tiles.
         let over_icon = cursor.position_over(self.icon_bounds(bounds)).is_some();
