@@ -246,6 +246,15 @@ impl Layout {
         }
         set("folded", self.folded.iter().map(|s| s.id()).collect::<Vec<_>>());
     }
+
+    /// Folded or open while the popup is, not kept.
+    pub fn show(&mut self, section: Section, folded: bool) {
+        if folded == section.folded_at_first() {
+            self.folded.remove(&section);
+        } else {
+            self.folded.insert(section);
+        }
+    }
 }
 
 /// Whether the old list of tiles was made a grid, with the sliders and
@@ -275,4 +284,20 @@ pub fn primary_display() -> Option<String> {
 
 pub fn set_primary_display(name: &str) {
     set("primary_display", name);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn show_folds_or_opens_for_now_whatever_the_section_starts_as() {
+        let mut layout = Layout::default();
+        for section in [Section::Calendar, Section::Clipboard] {
+            layout.show(section, true);
+            assert!(layout.is_folded(section));
+            layout.show(section, false);
+            assert!(!layout.is_folded(section));
+        }
+    }
 }

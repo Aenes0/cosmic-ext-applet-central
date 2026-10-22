@@ -249,6 +249,34 @@ impl App {
         }
     }
 
+    /// The notifications' cards: an app's newest, or all of its when shown.
+    fn notification_cards(&self) -> usize {
+        let mut apps: Vec<&str> = Vec::new();
+        let mut cards = 0;
+        for notification in &self.notifications {
+            let app = notification.app.as_str();
+            if !apps.contains(&app) {
+                apps.push(app);
+                cards += 1;
+            } else if self.expanded.contains(app) {
+                cards += 1;
+            }
+        }
+        cards
+    }
+
+    /// Whether the top has room for every notification with the calendar
+    /// and what was copied open.
+    pub(crate) fn everything_fits(&self, editing: bool) -> bool {
+        let notifications = match self.notification_cards() {
+            0 => 40.0,
+            n => 56.0 + n as f32 * (NOTIFICATION_HEIGHT + gap()),
+        };
+        let clipboard =
+            56.0 + self.clipboard.len().clamp(1, CLIPBOARD_SHOWN) as f32 * (CLIPBOARD_HEIGHT + 4.0);
+        notifications + 220.0 + clipboard + 2.0 * PANEL_GAP <= self.top_room(editing)
+    }
+
     /// About how tall the top's panels are, open or folded as they are.
     pub(crate) fn top_height(&self) -> f32 {
         let notifications = self.notifications_height();

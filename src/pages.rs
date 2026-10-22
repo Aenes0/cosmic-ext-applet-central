@@ -1488,13 +1488,9 @@ impl App {
                 cards.push(self.notification_card(group[0], more));
             }
         }
-        // Two show, the others scroll in their own panel.
-        let shown = crate::board::NOTIFICATIONS_SHOWN as f32;
-        let list = widget::container(
-            widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
-                .height(Length::Shrink),
-        )
-        .max_height(shown * crate::board::NOTIFICATION_HEIGHT + (shown - 1.0) * f32::from(spacing.space_xs));
+        // As many as the panel has room for; the others scroll.
+        let list = widget::scrollable(widget::column::with_children(cards).spacing(spacing.space_xs))
+            .height(Length::Fill);
         widget::column::with_children(vec![header, list.into()])
             .spacing(spacing.space_xs)
             .padding(spacing.space_s)

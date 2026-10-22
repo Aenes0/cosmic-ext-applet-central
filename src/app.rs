@@ -793,6 +793,12 @@ impl cosmic::Application for App {
                 // What another screen's applet wrote down: read now, not
                 // watched all the time.
                 self.clipboard = crate::clipboard::load();
+                // No room for it all: the calendar and what was copied fold,
+                // for the notifications; with room, they open.
+                let folded = !self.everything_fits(false);
+                self.layout.show(Section::Notifications, false);
+                self.layout.show(Section::Calendar, folded);
+                self.layout.show(Section::Clipboard, folded);
                 // The main monitor's brightness, for its slider: read when
                 // the popup opens, but not often, and only that one's (each
                 // DDC read stalls the GPU's I²C for a moment).
@@ -857,7 +863,8 @@ impl cosmic::Application for App {
                             break;
                         }
                         if !self.layout.is_folded(other) {
-                            self.layout.toggle_fold(other);
+                            // For now only: the next opening decides again.
+                            self.layout.show(other, true);
                         }
                     }
                 }
