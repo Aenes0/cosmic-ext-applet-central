@@ -18,7 +18,7 @@ use std::{
     },
     path::PathBuf,
     sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cosmic::cctk::{
@@ -135,6 +135,33 @@ impl Reads {
     fn supersede(&mut self) {
         self.newest += 1;
         self.pending = false;
+    }
+}
+
+/// How long the clipboard stays empty before the last copy goes back on it.
+/// Chromium and Electron empty it right before each copy: put back in that
+/// gap, the last copy lands on the new one and the new one is lost.
+const GRACE: Duration = Duration::from_millis(300);
+
+/// Since when the clipboard is empty, while it stays so.
+#[derive(Default)]
+struct Emptied {
+    since: Option<Instant>,
+}
+
+impl Emptied {
+    fn cleared(&mut self, now: Instant) {
+        self.since = Some(now);
+    }
+
+    fn filled(&mut self) {
+        self.since = None;
+    }
+
+    /// Whether the last copy goes back now: empty for the whole grace, and
+    /// no copy still read, for that one's the newest and comes first.
+    fn due(&self, now: Instant, reading: bool) -> bool {
+        !reading && self.since.is_some_and(|since| now.saturating_duration_since(since) >= GRACE)
     }
 }
 
@@ -406,9 +433,11 @@ struct State {
     qh: QueueHandle<State>,
     keeper: Keeper,
     reads: Reads,
-    /// The clipboard emptied while a copy was still read: offered again
-    /// once the read is back.
-    emptied: bool,
+    /// The clipboard emptied: the last copy goes back once the grace is
+    /// over, or once a copy still read then is back.
+    emptied: Emptied,
+    /// To wake up when the grace is over.
+    timers: calloop::LoopHandle<'static, State>,
     store: Arc<Store>,
     changed: Arc<Notify>,
     results: channel::Sender<Read>,
@@ -433,7 +462,7 @@ fn run(
     let manager: ExtDataControlManagerV1 = globals.bind(&qh, 1..=1, ())?;
     let seat: WlSeat = globals.bind(&qh, 1..=9, ())?;
 
-    let mut event_loop = calloop::EventLoop::<State>::try_new()?;
+    let mut event_loop = calloop::EventLoop::<'static, State>::try_new()?;
     let (results, read) = channel::channel::<Read>();
     let mut state = State {
         device: Some(manager.get_data_device(&seat, &qh, ())),
@@ -443,7 +472,8 @@ fn run(
         qh,
         keeper: Keeper::default(),
         reads: Reads::default(),
-        emptied: false,
+        emptied: Emptied::default(),
+        timers: event_loop.handle(),
         store,
         changed,
         results,
@@ -487,7 +517,7 @@ impl State {
         if let Some(device) = &self.device {
             device.set_selection(Some(&source));
         }
-        self.emptied = false;
+        self.emptied.filled();
         self.flush();
     }
 
@@ -534,16 +564,33 @@ impl State {
         {
             self.changed.notify_one();
         }
-        if landed.fresh && self.emptied {
-            self.offer_kept();
+        if landed.fresh {
+            self.offer_kept_if_due();
         }
     }
 
-    /// The clipboard is empty: the last copy goes back on it.
-    fn offer_kept(&mut self) {
+    /// The clipboard emptied: the last copy goes back if it stays empty for
+    /// the grace, not in the gap an app leaves right before copying.
+    fn clipboard_emptied(&mut self) {
+        self.emptied.cleared(Instant::now());
+        let timer = calloop::timer::Timer::from_duration(GRACE);
+        let inserted = self.timers.insert_source(timer, |_, (), state: &mut State| {
+            state.offer_kept_if_due();
+            calloop::timer::TimeoutAction::Drop
+        });
+        if let Err(err) = inserted {
+            tracing::warn!("clipboard: no timer to put the last copy back: {err}");
+        }
+    }
+
+    /// The last copy goes back, if the clipboard stayed empty long enough.
+    fn offer_kept_if_due(&mut self) {
+        if !self.emptied.due(Instant::now(), self.reads.pending()) {
+            return;
+        }
         match self.keeper.emptied() {
             Some(formats) => self.offer(formats),
-            None => self.emptied = false,
+            None => self.emptied.filled(),
         }
     }
 }
@@ -587,7 +634,7 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
     ) {
         match event {
             ext_data_control_device_v1::Event::Selection { id: Some(offer) } => {
-                state.emptied = false;
+                state.emptied.filled();
                 let types = offer
                     .data::<OfferData>()
                     .map(|data| data.types.lock().unwrap_or_else(PoisonError::into_inner).clone())
@@ -599,14 +646,7 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
                 }
                 offer.destroy();
             }
-            ext_data_control_device_v1::Event::Selection { id: None } => {
-                // What's being read comes first: it's the newest copy.
-                if state.reads.pending() {
-                    state.emptied = true;
-                } else {
-                    state.offer_kept();
-                }
-            }
+            ext_data_control_device_v1::Event::Selection { id: None } => state.clipboard_emptied(),
             ext_data_control_device_v1::Event::Finished => {
                 tracing::error!("clipboard: the compositor took the seat's data device away");
                 std::process::exit(1);
@@ -829,6 +869,45 @@ mod tests {
         assert!(landed.record.is_some());
         assert!(landed.fresh);
         assert_eq!(keeper.emptied().unwrap()["text/plain"].as_slice(), b"a");
+    }
+
+    #[test]
+    fn cleared_right_before_a_copy_puts_nothing_back() {
+        // Chromium and Electron empty the clipboard, then copy.
+        let start = std::time::Instant::now();
+        let mut emptied = Emptied::default();
+        emptied.cleared(start);
+
+        emptied.filled();
+
+        assert!(!emptied.due(start + GRACE * 4, false));
+    }
+
+    #[test]
+    fn empty_for_the_whole_grace_puts_the_last_copy_back() {
+        let start = std::time::Instant::now();
+        let mut emptied = Emptied::default();
+        emptied.cleared(start);
+
+        assert!(!emptied.due(start, false));
+        assert!(!emptied.due(start + GRACE - Duration::from_millis(1), false));
+        assert!(emptied.due(start + GRACE, false));
+    }
+
+    #[test]
+    fn a_copy_still_read_comes_before_the_last_one() {
+        let start = std::time::Instant::now();
+        let mut emptied = Emptied::default();
+        emptied.cleared(start);
+
+        assert!(!emptied.due(start + GRACE * 4, true));
+    }
+
+    #[test]
+    fn never_emptied_puts_nothing_back() {
+        let start = std::time::Instant::now();
+
+        assert!(!Emptied::default().due(start + GRACE * 4, false));
     }
 
     #[test]
