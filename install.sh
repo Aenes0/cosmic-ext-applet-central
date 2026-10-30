@@ -26,9 +26,14 @@ sed "s|@bindir@|$prefix/bin|" "data/io.github.Aenes0.CosmicCentral.Clipboard.ser
 # So is the notifications' history.
 sed "s|@bindir@|$prefix/bin|" "data/central-notifications.service.in" > "$prefix/share/systemd/user/central-notifications.service"
 sed "s|@bindir@|$prefix/bin|" "data/io.github.Aenes0.CosmicCentral.Notifications.service.in" > "$prefix/share/dbus-1/services/io.github.Aenes0.CosmicCentral.Notifications.service"
+# And the panels' host: the Central's and the monitor's panels, for every screen, apart from the bar.
+sed "s|@bindir@|$prefix/bin|" "data/central-panels.service.in" > "$prefix/share/systemd/user/central-panels.service"
+sed "s|@bindir@|$prefix/bin|" "data/io.github.Aenes0.CosmicCentral.Panels.service.in" > "$prefix/share/dbus-1/services/io.github.Aenes0.CosmicCentral.Panels.service"
 # Only a plain ~/.local install enables the unit here; Flatpak builds and system prefixes leave that to the packager.
 if [ "$prefix" = "$HOME/.local" ] && [ ! -f /.flatpak-info ]; then
     systemctl --user daemon-reload && systemctl --user enable central-clipboard.service && systemctl --user restart central-clipboard.service || true
     systemctl --user enable central-notifications.service && systemctl --user restart central-notifications.service || true
+    # Restarting it closes an open panel, nothing else: the bar is not touched.
+    systemctl --user enable central-panels.service && systemctl --user restart central-panels.service || true
 fi
 echo "Installed. Add \"Central\" in Settings > Desktop > Panel > Applets."

@@ -22,7 +22,7 @@ use cosmic::{
     Element, Task, app,
     iced::{
         self, Alignment, Length, Limits, Subscription, event,
-        platform_specific::shell::commands::popup::destroy_popup, window,
+        platform_specific::shell::commands::layer_surface::destroy_layer_surface, window,
     },
     theme,
     widget::{self, button},
@@ -32,6 +32,8 @@ use chart::HISTORY;
 use config::{BarItem, BarMode, Panel, Settings};
 use widget::segmented_button::{Entity, SingleSelectModel};
 use sample::{Info, Reading};
+
+use crate::panels::{place::Which, service::panel_output};
 
 pub const APP_ID: &str = "io.github.Aenes0.CosmicCentral.Monitor";
 
@@ -77,12 +79,13 @@ pub enum Message {
     /// Time to read again.
     Tick,
     Reading(Box<Reading>),
+    /// The reading took too long, or failed: the next tick tries again.
+    ReadGivenUp,
     TogglePopup,
     PanelPress(window::Id),
     Closed(window::Id),
     Output(Option<String>, Option<i32>),
     ScreenHeight(Option<i32>),
-    Resized(window::Id, iced::Size),
     /// Into editing or out of it.
     Edit(bool),
     ToggleFold(Panel),
@@ -186,7 +189,9 @@ pub struct Monitor {
     pub(crate) rest_input: String,
     screen_height: Option<i32>,
     screen_height_known: bool,
-    button_size: Option<iced::Size>,
+    /// Run by the panels' host, which owns the surface it shows on; else
+    /// the bar's applet, which asks the host to show it.
+    hosted: bool,
     closed_at: Option<Instant>,
     /// Each item with modes: its choice on the arranging.
     bar_models: Vec<(BarItem, SingleSelectModel)>,
@@ -254,10 +259,17 @@ impl Monitor {
                 && (full || self.gpu_energy.is_none_or(|(_, at)| at.elapsed() >= GPU_ENERGY_EVERY)),
         };
         Task::future(async move {
-            let reading = tokio::task::spawn_blocking(move || sample::reading(depth))
-                .await
-                .unwrap_or_else(|_| sample::reading(sample::Depth { procs: false, ..depth }));
-            cosmic::action::app(Message::Reading(Box::new(reading)))
+            // Off the UI's thread at idle priority, and given up if it hangs
+            // (a driver, /proc); without the processes if reading them failed.
+            use crate::slow::{Slow, blocking};
+            let reading = match blocking(Slow::Sample, move || sample::reading(depth)).await {
+                Some(reading) => Some(reading),
+                None => blocking(Slow::Sample, move || sample::reading(sample::Depth { procs: false, ..depth })).await,
+            };
+            match reading {
+                Some(reading) => cosmic::action::app(Message::Reading(Box::new(reading))),
+                None => cosmic::action::app(Message::ReadGivenUp),
+            }
         })
     }
 
@@ -458,30 +470,67 @@ impl Monitor {
         self.editing = false;
         self.asking_end = None;
         match self.popup.take() {
-            Some(id) => destroy_popup(id),
+            Some(id) => destroy_layer_surface(id),
             None => Task::none(),
         }
     }
-}
 
-/// The popup under the whole button, from its start: the Central's mirror.
-fn line_up(
-    positioner: &mut iced::platform_specific::runtime::wayland::popup::SctkPositioner,
-    panel: cosmic::applet::cosmic_panel_config::PanelAnchor,
-    button: iced::Size,
-) {
-    use cosmic::{
-        applet::cosmic_panel_config::PanelAnchor,
-        cctk::sctk::reexports::protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity},
-    };
-    positioner.anchor_rect.width = button.width.round() as i32;
-    positioner.anchor_rect.height = button.height.round() as i32;
-    (positioner.anchor, positioner.gravity) = match panel {
-        PanelAnchor::Top => (Anchor::BottomLeft, Gravity::BottomRight),
-        PanelAnchor::Bottom => (Anchor::TopLeft, Gravity::TopRight),
-        PanelAnchor::Left => (Anchor::TopRight, Gravity::BottomRight),
-        PanelAnchor::Right => (Anchor::TopLeft, Gravity::BottomLeft),
-    };
+    /// The panel, for the panels' host: never on the bar, reading only
+    /// while it shows, and never the one counting the energy (it would
+    /// count only then).
+    pub(crate) fn hosted(core: app::Core) -> Self {
+        let (mut monitor, _) = <Self as cosmic::Application>::init(core, ());
+        monitor.hosted = true;
+        // What init asked for is not run: nothing on its way.
+        monitor.reading = false;
+        monitor.weather_fetching = false;
+        monitor.meter.watch_only();
+        monitor
+    }
+
+    /// The host's surface it shows on, while it shows.
+    pub(crate) fn surface(&self) -> Option<window::Id> {
+        self.popup
+    }
+
+    /// Shows on the host's surface `id`, on a page (edit, place) or the
+    /// main one, on a screen this tall. The numbers come after.
+    pub(crate) fn show_hosted(&mut self, id: window::Id, page: Option<&str>, screen_height: Option<i32>) -> app::Task<Message> {
+        if screen_height.is_some() {
+            self.screen_height = screen_height;
+            self.screen_height_known = true;
+        }
+        self.popup = Some(id);
+        let page = page.map_or_else(Task::none, |page| self.turn_to(page));
+        // Fresh numbers, and the processes, at once; the weather, if it's old.
+        let weather = self.weather_tick(false);
+        Task::batch([page, self.read(), weather])
+    }
+
+    /// Hides from the host's surface, and has it destroyed.
+    pub(crate) fn close_hosted(&mut self) -> app::Task<Message> {
+        self.close_popup()
+    }
+
+    /// Turns to the arranging (`edit`) or to choosing the weather's place
+    /// (`place`, "Curitiba" searched, as for screenshots).
+    pub(crate) fn turn_to(&mut self, page: &str) -> app::Task<Message> {
+        match page {
+            "edit" => {
+                self.editing = true;
+                self.asking_end = None;
+                Task::none()
+            }
+            "place" => {
+                self.place_editing = true;
+                self.place_input = "Curitiba".into();
+                self.place_results = None;
+                self.place_searching = false;
+                <Self as cosmic::Application>::update(self, Message::SearchPlace)
+            }
+            _ => Task::none(),
+        }
+    }
 }
 
 fn popup_limits(max_height: f32) -> Limits {
@@ -573,11 +622,13 @@ impl cosmic::Application for Monitor {
             monitor.place_input = "Curitiba".into();
         }
         let task = match preview {
-            Some(_) => Task::batch([
+            // Shown by the panels' host, on this bar's screen.
+            Some(page) => Task::batch([
                 monitor.read(),
-                Task::future(async {
+                Task::future(async move {
                     tokio::time::sleep(Duration::from_millis(2500)).await;
-                    cosmic::action::app(Message::TogglePopup)
+                    crate::panels::service::open(Which::Monitor, panel_output(), page).await;
+                    cosmic::action::app(Message::None)
                 }),
             ]),
             None => monitor.read(),
@@ -610,31 +661,19 @@ impl cosmic::Application for Monitor {
                 self.reading = false;
                 self.take(*reading);
             }
+            Message::ReadGivenUp => self.reading = false,
             Message::TogglePopup => {
+                // On the bar, the host shows it; hosted, the host opens it.
+                if !self.hosted {
+                    let toggle = crate::panels::service::toggle(Which::Monitor, panel_output());
+                    return Task::future(async move {
+                        toggle.await;
+                        cosmic::action::app(Message::None)
+                    });
+                }
                 if self.popup.is_some() {
                     return self.close_popup();
                 }
-                let Some(parent) = self.core.main_window_id() else {
-                    return Task::none();
-                };
-                let id = window::Id::unique();
-                self.popup = Some(id);
-                let open = cosmic::surface::surface_task(cosmic::surface::action::app_popup(
-                    |_: &Self| Default::default(),
-                    move |monitor: &mut Self| {
-                        let mut settings = monitor.core.applet.get_popup_settings(parent, id, None, None, None);
-                        settings.positioner.size_limits = popup_limits(monitor.max_height());
-                        if let Some(size) = monitor.button_size {
-                            line_up(&mut settings.positioner, monitor.core.applet.anchor, size);
-                        }
-                        settings
-                    },
-                    None,
-                ));
-                // Fresh numbers, and the processes, at once; the weather,
-                // if it's old.
-                let weather = self.weather_tick(false);
-                return Task::batch([open, self.read(), weather]);
             }
             Message::PanelPress(id) => {
                 let just_closed = self.closed_at.is_some_and(|at| at.elapsed() < Duration::from_millis(250));
@@ -669,11 +708,6 @@ impl cosmic::Application for Monitor {
                 if height.is_some() {
                     self.screen_height = height;
                     self.screen_height_known = true;
-                }
-            }
-            Message::Resized(id, size) => {
-                if Some(id) == self.core.main_window_id() {
-                    self.button_size = Some(size);
                 }
             }
             Message::Edit(on) => {
@@ -793,7 +827,6 @@ impl cosmic::Application for Monitor {
                     _ => None,
                 }
             }),
-            window::resize_events().map(|(id, size)| Message::Resized(id, size)),
             event::listen_with(|event, _, id| match event {
                 iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                     Some(Message::PanelPress(id))
@@ -1020,13 +1053,15 @@ impl cosmic::Application for Monitor {
         if self.popup != Some(id) {
             return widget::text("").into();
         }
+        crate::timing::viewed("monitor");
         let content = if self.editing { self.edit_view() } else { self.main_view() };
-        cosmic::widget::autosize::autosize(
-            widget::container(content).width(Length::Fixed(WIDTH)),
-            cosmic::widget::Id::new("cosmic-applet-autosize"),
-        )
-        .limits(popup_limits(self.max_height()))
-        .into()
+        // Within a popup's limits still, on the host's surface as big as
+        // the screen: as tall as the screen allows.
+        let limits = popup_limits(self.max_height());
+        widget::container(widget::container(content).width(Length::Fixed(WIDTH)))
+            .max_width(limits.max().width)
+            .max_height(limits.max().height)
+            .into()
     }
 
     fn on_close_requested(&self, id: window::Id) -> Option<Message> {

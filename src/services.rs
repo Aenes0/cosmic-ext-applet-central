@@ -1178,7 +1178,73 @@ where
     let lock = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into()) + "/central-ddc.lock";
     let mut command = crate::host::command("flock", &[]);
     command.arg(lock).arg("ddcutil").args(args);
+    // Only when nothing else wants the CPU. (The I²C's hold on the GPU is
+    // the kernel's: this doesn't shorten it, only keeps the rest ahead.)
+    // SAFETY: only sched_setscheduler, async-signal-safe, in the child.
+    unsafe {
+        command.pre_exec(|| {
+            let param = libc::sched_param { sched_priority: 0 };
+            libc::sched_setscheduler(0, libc::SCHED_IDLE, &param);
+            Ok(())
+        });
+    }
     command
+}
+
+/// Where what is known of the monitors' DDC is kept across sessions: which
+/// have it (finding out holds the GPU's I²C), their levels last read or set.
+fn ddc_state_file(name: &str) -> Option<std::path::PathBuf> {
+    user_dir("STATE", ".local/state").map(|dir| dir.join("cosmic-central").join(name))
+}
+
+/// This session's file of an older version, read if there's nothing kept.
+fn ddc_runtime_file(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())).join(name)
+}
+
+fn write_ddc_state(name: &str, text: &str) {
+    let Some(path) = ddc_state_file(name) else {
+        return;
+    };
+    if let Some(dir) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(dir)
+    {
+        tracing::warn!("{} not made: {err}", dir.display());
+        return;
+    }
+    if let Err(err) = std::fs::write(&path, text) {
+        tracing::warn!("{} not written: {err}", path.display());
+    }
+}
+
+/// `connector number` a line.
+fn parse_ddc_displays(text: &str) -> HashMap<String, u32> {
+    text.lines()
+        .filter_map(|line| {
+            let (name, number) = line.trim().split_once(' ')?;
+            Some((name.to_owned(), number.trim().parse().ok()?))
+        })
+        .collect()
+}
+
+/// The monitors known to have DDC, as kept (none asked).
+fn known_ddc_displays() -> HashMap<String, u32> {
+    let kept = ddc_state_file("ddc-displays").and_then(|path| std::fs::read_to_string(path).ok());
+    let text = kept
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| std::fs::read_to_string(ddc_runtime_file("central-ddc-displays")).ok())
+        .unwrap_or_default();
+    parse_ddc_displays(&text)
+}
+
+/// Finds which monitors have DDC if none is known yet: once, in the
+/// background, never on opening a panel (it holds the GPU's I²C, and with
+/// it the compositor's rendering, for a moment). Whether any is known now.
+pub async fn detect_ddc_if_unknown() -> bool {
+    if !known_ddc_displays().is_empty() {
+        return true;
+    }
+    !ddc_displays().await.is_empty()
 }
 
 /// A monitor's brightness, `VCP 10`: current and maximum. DDC sometimes
@@ -1210,27 +1276,15 @@ async fn ddc_displays() -> HashMap<String, u32> {
     if let Some(known) = KNOWN.lock().unwrap().clone() {
         return known;
     }
-    let file = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())
-        + "/central-ddc-displays";
-    let parse = |text: &str| -> HashMap<String, u32> {
-        text.lines()
-            .filter_map(|line| {
-                let (name, number) = line.split_once(' ')?;
-                Some((name.to_owned(), number.parse().ok()?))
-            })
-            .collect()
-    };
-    if let Ok(text) = std::fs::read_to_string(&file)
-        && !text.trim().is_empty()
-    {
-        let known = parse(&text);
+    let known = known_ddc_displays();
+    if !known.is_empty() {
         *KNOWN.lock().unwrap() = Some(known.clone());
         return known;
     }
     let found = detect_ddc().await;
     if !found.is_empty() {
         let text: String = found.iter().map(|(name, n)| format!("{name} {n}\n")).collect();
-        _ = std::fs::write(&file, text);
+        write_ddc_state("ddc-displays", &text);
         *KNOWN.lock().unwrap() = Some(found.clone());
     }
     found
@@ -1269,13 +1323,48 @@ fn parse_vcp(output: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// Whose brightness to read over DDC, each read being slow and heavy.
+/// Whose brightness to read over DDC, each read being slow and heavy: a
+/// read holds the GPU's I²C, and with it the compositor's render threads
+/// (measured: up to ~235 ms stuck, the cursor with them, per read).
 #[derive(Clone, Debug)]
 pub enum DdcRead {
-    /// Every monitor's, for the page of displays.
+    /// Every monitor's, for the page of displays, asked for.
     All,
-    /// Only this one's, by connector; or, none given, the biggest one's.
-    Main(Option<String>),
+    /// None read: the levels last read or set, for opening the Central.
+    Remembered,
+}
+
+
+/// `number current max` a line.
+fn parse_ddc_levels(text: &str) -> HashMap<u32, (u32, u32)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().map(str::parse::<u32>);
+            let (Some(Ok(number)), Some(Ok(current)), Some(Ok(max))) = (fields.next(), fields.next(), fields.next()) else {
+                return None;
+            };
+            (current <= max && max > 0).then_some((number, (current, max)))
+        })
+        .collect()
+}
+
+fn remembered_ddc_levels() -> HashMap<u32, (u32, u32)> {
+    ddc_state_file("ddc-levels")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|text| parse_ddc_levels(&text))
+        .unwrap_or_default()
+}
+
+fn remember_ddc_levels(levels: &[(u32, u32, u32)]) {
+    if levels.is_empty() {
+        return;
+    }
+    let mut known = remembered_ddc_levels();
+    for &(number, current, max) in levels {
+        known.insert(number, (current, max));
+    }
+    let text: String = known.iter().map(|(n, (c, m))| format!("{n} {c} {m}\n")).collect();
+    write_ddc_state("ddc-levels", &text);
 }
 
 pub async fn displays(read: DdcRead) -> Vec<Display> {
@@ -1287,31 +1376,32 @@ pub async fn displays(read: DdcRead) -> Vec<Display> {
         return Vec::new();
     };
     let mut displays = parse_displays(&String::from_utf8_lossy(&output.stdout));
-    if displays.iter().any(|d| d.enabled && !d.internal()) {
-        let ddc = ddc_displays().await;
-        let main = match &read {
-            DdcRead::All => None,
-            DdcRead::Main(Some(name)) if ddc.contains_key(name) => Some(name.clone()),
-            DdcRead::Main(_) => displays
-                .iter()
-                .filter(|d| d.enabled && ddc.contains_key(&d.name))
-                .max_by_key(|d| d.width * d.height)
-                .map(|d| d.name.clone()),
-        };
+    if !displays.iter().any(|d| d.enabled && !d.internal()) {
+        return displays;
+    }
+    if matches!(read, DdcRead::Remembered) {
+        let (levels, known) = (remembered_ddc_levels(), known_ddc_displays());
         for display in &mut displays {
-            let Some(&number) = ddc.get(&display.name) else {
-                continue;
-            };
-            if main.as_ref().is_some_and(|main| *main != display.name) {
-                // Known to have DDC, its level unread: kept from before.
-                display.ddc = Some((number, u32::MAX, 100));
-                continue;
-            }
-            if let Some((current, max)) = ddc_brightness(number).await {
+            if let Some(&number) = known.get(&display.name) {
+                // Unread: as last read or set, or kept from before.
+                let (current, max) = levels.get(&number).copied().unwrap_or((u32::MAX, 100));
                 display.ddc = Some((number, current, max));
             }
         }
+        return displays;
     }
+    let ddc = ddc_displays().await;
+    let mut read_now = Vec::new();
+    for display in &mut displays {
+        let Some(&number) = ddc.get(&display.name) else {
+            continue;
+        };
+        if let Some((current, max)) = ddc_brightness(number).await {
+            display.ddc = Some((number, current, max));
+            read_now.push((number, current, max));
+        }
+    }
+    remember_ddc_levels(&read_now);
     displays
 }
 
@@ -1345,10 +1435,13 @@ pub async fn set_scale(display: Display, scale: f32) {
         .await;
 }
 
-pub async fn set_ddc_brightness(number: u32, value: u32) {
-    _ = ddcutil(["--display", &number.to_string(), "setvcp", "10", &value.to_string()])
+pub async fn set_ddc_brightness(number: u32, value: u32, max: u32) {
+    let set = ddcutil(["--display", &number.to_string(), "setvcp", "10", &value.to_string()])
         .status()
         .await;
+    if set.is_ok_and(|status| status.success()) {
+        remember_ddc_levels(&[(number, value, max)]);
+    }
 }
 
 /// cosmic-comp's settings, kept as cosmic-comp-config does without needing
@@ -1943,6 +2036,22 @@ impl Setting {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ddc_displays_are_read_back_and_nonsense_is_left_out() {
+        let known = super::parse_ddc_displays("DP-1 1\nHDMI-A-1 1\n  DP-3 2 \nbroken\nDP-2 x\n");
+        assert_eq!(known.len(), 3);
+        assert_eq!(known["DP-3"], 2);
+        assert_eq!(known["HDMI-A-1"], 1);
+    }
+
+    #[test]
+    fn ddc_levels_are_read_back_and_nonsense_is_left_out() {
+        let levels = super::parse_ddc_levels("1 50 100\n2 82 100\nx 1 2\n3 120 100\n4 1 0\n5 7\n");
+        assert_eq!(levels.len(), 2);
+        assert_eq!(levels[&1], (50, 100));
+        assert_eq!(levels[&2], (82, 100));
+    }
+
     use super::*;
 
     #[test]

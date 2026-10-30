@@ -1,0 +1,26 @@
+[Unit]
+Description=Central: painéis do Central e do monitor do sistema
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# Ready once on the bus; alive while its UI's loop beats (sd_notify from
+# that loop): a stuck UI is restarted, nothing else.
+Type=notify
+NotifyAccess=main
+BusName=io.github.Aenes0.CosmicCentral.Panels
+ExecStart=@bindir@/cosmic-ext-applet-central --panels
+WatchdogSec=20
+Restart=on-failure
+RestartSec=2
+# Never ahead of the compositor, the bar or the cursor.
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=200M
+MemoryMax=400M
+TasksMax=64
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=graphical-session.target

@@ -100,20 +100,31 @@ pub struct Meter {
     /// Held while this applet is the one counting.
     lock: Option<File>,
     saved: Instant,
+    /// Never the one counting: only reads what the counting one wrote.
+    watching: bool,
 }
 
 impl Default for Meter {
     fn default() -> Self {
-        Self { ledger: load(), lock: None, saved: Instant::now() }
+        Self { ledger: load(), lock: None, saved: Instant::now(), watching: false }
     }
 }
 
 impl Meter {
+    /// Never counts, as the panels' host, which reads only while a panel
+    /// shows: the bar's applets count all the time.
+    pub fn watch_only(&mut self) {
+        self.watching = true;
+    }
+
     /// Whether this one counts: it takes the lock if it's free, as when
     /// the applet that held it is gone.
     fn counting(&mut self) -> bool {
         if self.lock.is_some() {
             return true;
+        }
+        if self.watching {
+            return false;
         }
         let dir = dir();
         _ = std::fs::create_dir_all(&dir);

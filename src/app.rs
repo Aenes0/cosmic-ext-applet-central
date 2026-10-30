@@ -8,7 +8,7 @@ use cosmic::{
     Element, Task, app,
     iced::{
         self, Alignment, Limits, Subscription, event,
-        platform_specific::shell::commands::popup::destroy_popup, window,
+        platform_specific::shell::commands::layer_surface::destroy_layer_surface, window,
     },
     theme,
     widget::{self, button},
@@ -32,6 +32,8 @@ use crate::{
     },
     tiles::{Placed, Tile, icon, symbolic},
     transition::Transition,
+    panels::{place::Which, service::panel_output},
+    slow::{self, Slow},
 };
 
 /// Five columns of the grid, the gaps between them, and the panel's padding.
@@ -60,6 +62,40 @@ pub enum Page {
 }
 
 impl Page {
+    #[cfg(test)]
+    pub const ALL: [Page; 12] = [
+        Page::Main,
+        Page::Edit,
+        Page::Wifi,
+        Page::Vpn,
+        Page::Bluetooth,
+        Page::Power,
+        Page::Sound,
+        Page::Displays,
+        Page::Tiling,
+        Page::DoNotDisturb,
+        Page::Session,
+        Page::Camera,
+    ];
+
+    /// What `from_name` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Page::Main => "main",
+            Page::Edit => "edit",
+            Page::Wifi => "wifi",
+            Page::Vpn => "vpn",
+            Page::Bluetooth => "bluetooth",
+            Page::Power => "power",
+            Page::Sound => "sound",
+            Page::Displays => "displays",
+            Page::Tiling => "tiling",
+            Page::DoNotDisturb => "dnd",
+            Page::Session => "session",
+            Page::Camera => "camera",
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Page> {
         Some(match name {
             "main" => Page::Main,
@@ -127,6 +163,9 @@ pub enum Message {
     /// The clipboard service says the history changed (or an action it was
     /// asked for is done): read the file again.
     ClipboardChanged,
+    /// The history as read off the UI's thread (none if it took too long);
+    /// and whether the panel just opened, to fold for the room again.
+    Clipboard(Option<Vec<crate::clipboard::Entry>>, bool),
     /// An entry of the clipboard's history, by id: copied again; pinned or
     /// not; deleted. All but the pinned, cleared. Asked of the service.
     CopyEntry(u64),
@@ -172,8 +211,6 @@ pub enum Message {
     Output(Option<String>, Option<i32>),
     /// The panel's screen's height, turned or not, from cosmic-randr.
     ScreenHeight(Option<i32>),
-    /// A window's new size: the panel button's, for the popup to line up with.
-    Resized(window::Id, iced::Size),
     ToggleShowPercentage,
     SettingsChanged,
     Inhibited(Option<u32>),
@@ -345,8 +382,9 @@ pub struct App {
     screen_height: Option<i32>,
     /// Whether that came from cosmic-randr, which knows a screen standing.
     screen_height_known: bool,
-    /// The panel button's size, all its icons.
-    button_size: Option<iced::Size>,
+    /// Run by the panels' host, which owns the surface the panel shows on;
+    /// else the bar's applet, which asks the host to show it.
+    hosted: bool,
     /// When a volume or brightness slider last moved. What PipeWire or the
     /// settings daemon tell meanwhile is the slider's own change, from a
     /// moment before: it would pull the slider back, and reload the list
@@ -430,10 +468,86 @@ impl App {
         self.leave_edit(false);
         self.page = None;
         let destroy = match self.popup.take() {
-            Some(id) => destroy_popup(id),
+            Some(id) => destroy_layer_surface(id),
             None => Task::none(),
         };
         Task::batch([seen, destroy])
+    }
+
+    /// The panel, for the panels' host: never on the bar, never opening by
+    /// itself; what it read at start is all it waits for.
+    pub(crate) fn hosted(core: app::Core) -> Self {
+        let (mut app, _) = <Self as cosmic::Application>::init(core, ());
+        app.hosted = true;
+        app
+    }
+
+    /// The host's surface it shows on, while it shows.
+    pub(crate) fn surface(&self) -> Option<window::Id> {
+        self.popup
+    }
+
+    /// Shows on the host's surface `id`, on a page or the main one, on a
+    /// screen this tall. Nothing slow is waited for: it comes after.
+    pub(crate) fn show_hosted(&mut self, id: window::Id, page: Option<&str>, screen_height: Option<i32>) -> app::Task<Message> {
+        if screen_height.is_some() {
+            self.screen_height = screen_height;
+            self.screen_height_known = true;
+        }
+        self.popup = Some(id);
+        let opened = self.opened();
+        // Opened on a page, as a right click on the bar's icon, or a preview
+        // (what it picks or adds while editing kept).
+        match page.and_then(Page::from_name).filter(|page| *page != Page::Main) {
+            Some(page) => {
+                self.page = Some(page);
+                Task::batch([opened, self.load(page)])
+            }
+            None => opened,
+        }
+    }
+
+    /// Hides from the host's surface, and has it destroyed.
+    pub(crate) fn close_hosted(&mut self) -> app::Task<Message> {
+        self.close_popup()
+    }
+
+    /// Turns to a page while it shows.
+    pub(crate) fn turn_to(&mut self, page: &str) -> app::Task<Message> {
+        match Page::from_name(page) {
+            Some(page) => <Self as cosmic::Application>::update(self, Message::ShowPage(page)),
+            None => Task::none(),
+        }
+    }
+
+    /// What opening reads, the panel on its main page.
+    fn opened(&mut self) -> app::Task<Message> {
+        self.page = Some(Page::Main);
+        self.calendar_month = crate::calendar::Month::now();
+        self.fold_for_room();
+        // The monitors, for the main one's brightness slider: as last read
+        // or set. Never read over DDC on opening: a read holds the GPU's
+        // I²C and the compositor's render threads with it (measured: the
+        // cursor stuck up to ~235 ms); the page of displays reads them.
+        let stale = self.displays_read.is_none_or(|at| at.elapsed() > Duration::from_secs(120));
+        let displays = if stale {
+            self.displays_read = Some(std::time::Instant::now());
+            read_displays(services::DdcRead::Remembered)
+        } else {
+            Task::none()
+        };
+        // What another screen's applet wrote down: read now, not
+        // watched all the time; off the UI's thread.
+        Task::batch([load_clipboard(true), displays, read_camera()])
+    }
+
+    /// No room for it all: the calendar and what was copied fold, for the
+    /// notifications; with room, they open.
+    fn fold_for_room(&mut self) {
+        let folded = !self.everything_fits(false);
+        self.layout.show(Section::Notifications, false);
+        self.layout.show(Section::Calendar, folded);
+        self.layout.show(Section::Clipboard, folded);
     }
 
     /// Everything shown counts as seen; the service is told if anything was new.
@@ -485,9 +599,7 @@ impl App {
                 }),
                 load_mixer(),
             ]),
-            Page::Displays => Task::future(async {
-                cosmic::action::app(Message::Displays(services::displays(services::DdcRead::All).await))
-            }),
+            Page::Displays => read_displays(services::DdcRead::All),
             Page::Camera => read_camera(),
             _ => Task::none(),
         }
@@ -615,12 +727,43 @@ fn clipboard_ask(action: crate::clipboard::Action) -> app::Task<Message> {
 
 fn load_wifi(scan: bool, delay: Duration) -> app::Task<Message> {
     Task::future(async move {
-        if scan {
-            _ = services::wifi_networks(true).await;
+        let networks = slow::bounded(Slow::Wifi, async {
+            if scan {
+                _ = services::wifi_networks(true).await;
+            }
+            tokio::time::sleep(delay).await;
+            services::wifi_networks(false).await.ok().flatten()
+        });
+        match networks.await {
+            Some(networks) => cosmic::action::app(Message::WifiNetworks(networks)),
+            None => cosmic::action::app(Message::None),
         }
-        tokio::time::sleep(delay).await;
-        let networks = services::wifi_networks(false).await.ok().flatten();
-        cosmic::action::app(Message::WifiNetworks(networks))
+    })
+}
+
+/// The monitors, and the brightness asked for over DDC, which may hang.
+fn read_displays(read: services::DdcRead) -> app::Task<Message> {
+    Task::future(async move {
+        match slow::bounded(Slow::Ddc, services::displays(read)).await {
+            Some(displays) => cosmic::action::app(Message::Displays(displays)),
+            None => cosmic::action::app(Message::None),
+        }
+    })
+}
+
+/// The clipboard's history, read off the UI's thread.
+fn load_clipboard(opened: bool) -> app::Task<Message> {
+    Task::future(async move {
+        let entries = slow::blocking(Slow::Clipboard, crate::clipboard::load).await;
+        cosmic::action::app(Message::Clipboard(entries, opened))
+    })
+}
+
+/// Hands a request to the panels' host, not waiting on it.
+fn ask_host(asking: impl Future<Output = ()> + Send + 'static) -> app::Task<Message> {
+    Task::future(async move {
+        asking.await;
+        cosmic::action::app(Message::None)
     })
 }
 
@@ -653,30 +796,6 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
         }
         cosmic::action::app(Message::None)
     })
-}
-
-/// The popup under the whole button, flush with its end, as the Control
-/// Center on macOS: by the screen's corner when the button is there. COSMIC
-/// puts it under the button's first icon, which on this wide button left it
-/// far from the corner.
-fn line_up(
-    positioner: &mut iced::platform_specific::runtime::wayland::popup::SctkPositioner,
-    panel: cosmic::applet::cosmic_panel_config::PanelAnchor,
-    button: iced::Size,
-) {
-    use cosmic::{
-        applet::cosmic_panel_config::PanelAnchor,
-        cctk::sctk::reexports::protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity},
-    };
-    positioner.anchor_rect.width = button.width.round() as i32;
-    positioner.anchor_rect.height = button.height.round() as i32;
-    // Its end along the panel; down the panel when it's at a side.
-    (positioner.anchor, positioner.gravity) = match panel {
-        PanelAnchor::Top => (Anchor::BottomRight, Gravity::BottomLeft),
-        PanelAnchor::Bottom => (Anchor::TopRight, Gravity::TopLeft),
-        PanelAnchor::Left => (Anchor::TopRight, Gravity::BottomRight),
-        PanelAnchor::Right => (Anchor::TopLeft, Gravity::BottomLeft),
-    };
 }
 
 /// A VPN on or off. One that won't come on, often for a password only
@@ -780,55 +899,13 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> app::Task<Message> {
         match message {
             Message::TogglePopup => {
+                // On the bar, the host shows it; hosted, the host opens it.
+                if !self.hosted {
+                    return ask_host(crate::panels::service::toggle(Which::Central, panel_output()));
+                }
                 if self.popup.is_some() {
                     return self.close_popup();
                 }
-                let Some(parent) = self.core.main_window_id() else {
-                    return Task::none();
-                };
-                let id = window::Id::unique();
-                self.popup = Some(id);
-                self.page = Some(Page::Main);
-                self.calendar_month = crate::calendar::Month::now();
-                // What another screen's applet wrote down: read now, not
-                // watched all the time.
-                self.clipboard = crate::clipboard::load();
-                // No room for it all: the calendar and what was copied fold,
-                // for the notifications; with room, they open.
-                let folded = !self.everything_fits(false);
-                self.layout.show(Section::Notifications, false);
-                self.layout.show(Section::Calendar, folded);
-                self.layout.show(Section::Clipboard, folded);
-                // The main monitor's brightness, for its slider: read when
-                // the popup opens, but not often, and only that one's (each
-                // DDC read stalls the GPU's I²C for a moment).
-                let stale = self.displays_read.is_none_or(|at| at.elapsed() > Duration::from_secs(120));
-                let displays = if stale {
-                    self.displays_read = Some(std::time::Instant::now());
-                    let main = self.primary_display.clone();
-                    Task::future(async move {
-                        cosmic::action::app(Message::Displays(
-                            services::displays(services::DdcRead::Main(main)).await,
-                        ))
-                    })
-                } else {
-                    Task::none()
-                };
-                return Task::batch([displays, read_camera(), cosmic::surface::surface_task(cosmic::surface::action::app_popup(
-                    |_: &Self| Default::default(),
-                    move |app: &mut Self| {
-                        let mut settings =
-                            app.core
-                                .applet
-                                .get_popup_settings(parent, id, None, None, None);
-                        settings.positioner.size_limits = popup_limits(app.max_height());
-                        if let Some(size) = app.button_size {
-                            line_up(&mut settings.positioner, app.core.applet.anchor, size);
-                        }
-                        settings
-                    },
-                    None,
-                ))]);
             }
             Message::PanelPress(id) => {
                 // The click that closed the popup, if COSMIC closed it first,
@@ -841,9 +918,13 @@ impl cosmic::Application for App {
                 }
             }
             Message::Preview(page) => {
-                let open = self.update(Message::TogglePopup);
-                self.page = Some(page);
-                return Task::batch([open, self.load(page)]);
+                if !self.hosted {
+                    let open = crate::panels::service::open(Which::Central, panel_output(), page.name().to_owned());
+                    return ask_host(open);
+                }
+                if self.popup.is_some() {
+                    return self.update(Message::ShowPage(page));
+                }
             }
             Message::OpenAt(page) => {
                 if self.popup.is_some() {
@@ -954,7 +1035,15 @@ impl cosmic::Application for App {
             Message::CalendarShift(by) => self.calendar_month = self.calendar_month.shift(by),
             Message::CalendarToday => self.calendar_month = crate::calendar::Month::now(),
             Message::ClockTick => self.clock = crate::calendar::bar_lines(),
-            Message::ClipboardChanged => self.clipboard = crate::clipboard::load(),
+            Message::ClipboardChanged => return load_clipboard(false),
+            Message::Clipboard(entries, opened) => {
+                if let Some(entries) = entries {
+                    self.clipboard = entries;
+                    if opened && self.page == Some(Page::Main) {
+                        self.fold_for_room();
+                    }
+                }
+            }
             Message::CopyEntry(id) => return clipboard_ask(crate::clipboard::Action::Copy(id)),
             Message::PinEntry(id) => return clipboard_ask(crate::clipboard::Action::Pin(id)),
             Message::DeleteEntry(id) => return clipboard_ask(crate::clipboard::Action::Remove(id)),
@@ -1201,11 +1290,6 @@ impl cosmic::Application for App {
                 if height.is_some() {
                     self.screen_height = height;
                     self.screen_height_known = true;
-                }
-            }
-            Message::Resized(id, size) => {
-                if Some(id) == self.core.main_window_id() {
-                    self.button_size = Some(size);
                 }
             }
             Message::ToggleTouchpad => {
@@ -1528,8 +1612,9 @@ impl cosmic::Application for App {
                 let display = display.clone();
                 return Task::future(async move {
                     services::set_scale(display, scale).await;
-                    cosmic::action::app(Message::Displays(services::displays(services::DdcRead::All).await))
-                });
+                    cosmic::action::app(Message::None)
+                })
+                .chain(read_displays(services::DdcRead::All));
             }
             Message::SetDdcBrightness(index, percent) => {
                 if let Some((_, current, max)) = self
@@ -1543,14 +1628,14 @@ impl cosmic::Application for App {
             }
             Message::ApplyDdcBrightness(index) => {
                 // DDC is slow: only once let go.
-                if let Some((number, current, _)) = self
+                if let Some((number, current, max)) = self
                     .displays
                     .as_ref()
                     .and_then(|d| d.get(index))
                     .and_then(|d| d.ddc)
                 {
                     return Task::future(async move {
-                        services::set_ddc_brightness(number, current).await;
+                        services::set_ddc_brightness(number, current, max).await;
                         cosmic::action::app(Message::None)
                     });
                 }
@@ -1754,7 +1839,7 @@ impl cosmic::Application for App {
                 _ => None,
             }
         }));
-        subscriptions.push(window::resize_events().map(|(id, size)| Message::Resized(id, size)));
+
         subscriptions.push(event::listen_with(|event, _, id| match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                 Some(Message::PanelPress(id))
@@ -2030,6 +2115,7 @@ impl cosmic::Application for App {
         if self.popup != Some(id) {
             return widget::text("").into();
         }
+        crate::timing::viewed("central");
         let page = self.page.unwrap_or(Page::Main);
         let content = match page {
             Page::Main => self.main_page(),
@@ -2122,11 +2208,12 @@ impl cosmic::Application for App {
         };
         // The pages draw their own panels, apart, instead of the applet's
         // popup, all one: as applets' popups are sized.
-        cosmic::widget::autosize::autosize(
-            Transition::new(page as u64, depth, content),
-            cosmic::widget::Id::new("cosmic-applet-autosize"),
-        )
-            .limits(popup_limits(self.max_height()))
+        // Within a popup's limits still, on the host's surface as big as
+        // the screen: as tall as the screen allows, no wider than editing.
+        let limits = popup_limits(self.max_height());
+        widget::container(Transition::new(page as u64, depth, content))
+            .max_width(limits.max().width)
+            .max_height(limits.max().height)
             .into()
     }
 
@@ -2142,6 +2229,13 @@ mod tests {
     #[test]
     fn camera_page_by_name() {
         assert_eq!(Page::from_name("camera"), Some(Page::Camera));
+    }
+
+    #[test]
+    fn every_page_goes_by_its_name_and_back() {
+        for page in Page::ALL {
+            assert_eq!(Page::from_name(page.name()), Some(page));
+        }
     }
 
     #[test]
