@@ -308,7 +308,9 @@ impl cosmic::Application for Panels {
         // Which monitors have DDC, for the brightness sliders: found once,
         // well after starting, if not known from before (see DetectDdc).
         let detect = Task::perform(tokio::time::sleep(DETECT_AFTER), |()| cosmic::action::app(Message::DetectDdc));
-        (panels, detect)
+        // What the Central reads once, in the background (its brightness).
+        let warm = lift(panels.central.warm_up(), Message::Central);
+        (panels, Task::batch([detect, warm]))
     }
 
     fn core(&self) -> &app::Core {
@@ -410,6 +412,11 @@ impl cosmic::Application for Panels {
         // Under systemd's watchdog only: the beat, from this loop.
         if let Some(period) = watchdog::period() {
             subscriptions.push(iced::time::every(period).map(|_| Message::Beat));
+        }
+        // The Central's connections that stay, not made again at each
+        // opening (part of its own subscription while it shows).
+        if self.shown.as_ref().is_none_or(|shown| shown.which != Which::Central) {
+            subscriptions.push(self.central.lasting_subscription().map(Message::Central));
         }
         // Only while a panel shows: its own, and Escape or leaving it.
         if let Some(shown) = &self.shown {

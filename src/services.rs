@@ -128,7 +128,6 @@ enum Service {
     Battery,
     Peripherals,
     PowerProfiles,
-    Brightness,
 }
 
 impl Service {
@@ -138,7 +137,6 @@ impl Service {
             Self::Bluetooth => "org.bluez",
             Self::Battery | Self::Peripherals => "org.freedesktop.UPower",
             Self::PowerProfiles => "net.hadess.PowerProfiles",
-            Self::Brightness => "com.system76.CosmicSettingsDaemon",
         }
     }
 
@@ -168,10 +166,7 @@ impl Service {
     }
 
     async fn bus(self) -> zbus::Result<zbus::Connection> {
-        match self {
-            Self::Brightness => zbus::Connection::session().await,
-            _ => zbus::Connection::system().await,
-        }
+        zbus::Connection::system().await
     }
 
     async fn read(self, conn: &zbus::Connection) -> Update {
@@ -181,7 +176,6 @@ impl Service {
             Self::Battery => Update::Battery(battery(conn).await.ok().flatten()),
             Self::Peripherals => Update::Peripherals(peripherals(conn).await.unwrap_or_default()),
             Self::PowerProfiles => Update::PowerProfiles(power_profiles(conn).await.ok()),
-            Self::Brightness => Update::Brightness(brightness(conn).await.ok().flatten()),
         }
     }
 }
@@ -262,7 +256,6 @@ pub fn subscription() -> Subscription<Update> {
         watch(Service::Battery),
         watch(Service::Peripherals),
         watch(Service::PowerProfiles),
-        watch(Service::Brightness),
         volume_subscription(),
     ])
 }
@@ -881,10 +874,44 @@ async fn brightness(conn: &zbus::Connection) -> zbus::Result<Option<(i32, i32)>>
     Ok(Some((daemon.display_brightness().await?, max)))
 }
 
-pub async fn set_brightness(value: i32) {
+/// The display's brightness as COSMIC's settings daemon tells it, read
+/// now, and written down. Not watched: asking the daemon, connecting to it
+/// most of all, held the compositor's rendering for up to ~130 ms (measured,
+/// at each opening of the Central); so it's asked once in the background,
+/// on the page of displays, and set by the user.
+pub async fn read_brightness() -> Option<(i32, i32)> {
+    let conn = zbus::Connection::session().await.ok()?;
+    let read = brightness(&conn).await.ok().flatten();
+    if let Some((current, max)) = read {
+        remember_brightness(current, max);
+    }
+    read
+}
+
+/// The brightness last read or set, as written down.
+pub fn remembered_brightness() -> Option<(i32, i32)> {
+    state_file("brightness")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| parse_brightness(&text))
+}
+
+/// `current max`.
+fn parse_brightness(text: &str) -> Option<(i32, i32)> {
+    let mut fields = text.split_whitespace().map(str::parse::<i32>);
+    let (Some(Ok(current)), Some(Ok(max)), None) = (fields.next(), fields.next(), fields.next()) else {
+        return None;
+    };
+    (max > 0 && (0..=max).contains(&current)).then_some((current, max))
+}
+
+fn remember_brightness(current: i32, max: i32) {
+    write_state("brightness", &format!("{current} {max}\n"));
+}
+
+pub async fn set_brightness(value: i32, max: i32) {
     static LATEST: Latest<(), i32> = Latest::new();
     LATEST
-        .send((), value, |(), value| async move {
+        .send((), value, move |(), value| async move {
             let set = async {
                 let conn = zbus::Connection::session().await?;
                 SettingsDaemonProxy::new(&conn)
@@ -892,8 +919,9 @@ pub async fn set_brightness(value: i32) {
                     .set_display_brightness(value)
                     .await
             };
-            if let Err(err) = set.await {
-                tracing::warn!("cannot set brightness: {err}");
+            match set.await {
+                Ok(()) => remember_brightness(value, max),
+                Err(err) => tracing::warn!("cannot set brightness: {err}"),
             }
         })
         .await;
@@ -1193,7 +1221,7 @@ where
 
 /// Where what is known of the monitors' DDC is kept across sessions: which
 /// have it (finding out holds the GPU's I²C), their levels last read or set.
-fn ddc_state_file(name: &str) -> Option<std::path::PathBuf> {
+fn state_file(name: &str) -> Option<std::path::PathBuf> {
     user_dir("STATE", ".local/state").map(|dir| dir.join("cosmic-central").join(name))
 }
 
@@ -1202,8 +1230,8 @@ fn ddc_runtime_file(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())).join(name)
 }
 
-fn write_ddc_state(name: &str, text: &str) {
-    let Some(path) = ddc_state_file(name) else {
+fn write_state(name: &str, text: &str) {
+    let Some(path) = state_file(name) else {
         return;
     };
     if let Some(dir) = path.parent()
@@ -1229,7 +1257,7 @@ fn parse_ddc_displays(text: &str) -> HashMap<String, u32> {
 
 /// The monitors known to have DDC, as kept (none asked).
 fn known_ddc_displays() -> HashMap<String, u32> {
-    let kept = ddc_state_file("ddc-displays").and_then(|path| std::fs::read_to_string(path).ok());
+    let kept = state_file("ddc-displays").and_then(|path| std::fs::read_to_string(path).ok());
     let text = kept
         .filter(|text| !text.trim().is_empty())
         .or_else(|| std::fs::read_to_string(ddc_runtime_file("central-ddc-displays")).ok())
@@ -1284,7 +1312,7 @@ async fn ddc_displays() -> HashMap<String, u32> {
     let found = detect_ddc().await;
     if !found.is_empty() {
         let text: String = found.iter().map(|(name, n)| format!("{name} {n}\n")).collect();
-        write_ddc_state("ddc-displays", &text);
+        write_state("ddc-displays", &text);
         *KNOWN.lock().unwrap() = Some(found.clone());
     }
     found
@@ -1349,7 +1377,7 @@ fn parse_ddc_levels(text: &str) -> HashMap<u32, (u32, u32)> {
 }
 
 fn remembered_ddc_levels() -> HashMap<u32, (u32, u32)> {
-    ddc_state_file("ddc-levels")
+    state_file("ddc-levels")
         .and_then(|path| std::fs::read_to_string(path).ok())
         .map(|text| parse_ddc_levels(&text))
         .unwrap_or_default()
@@ -1364,7 +1392,7 @@ fn remember_ddc_levels(levels: &[(u32, u32, u32)]) {
         known.insert(number, (current, max));
     }
     let text: String = known.iter().map(|(n, (c, m))| format!("{n} {c} {m}\n")).collect();
-    write_ddc_state("ddc-levels", &text);
+    write_state("ddc-levels", &text);
 }
 
 pub async fn displays(read: DdcRead) -> Vec<Display> {
@@ -2036,6 +2064,18 @@ impl Setting {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn brightness_is_read_back_and_nonsense_is_left_out() {
+        assert_eq!(super::parse_brightness("40 100\n"), Some((40, 100)));
+        assert_eq!(super::parse_brightness("0 255"), Some((0, 255)));
+        assert_eq!(super::parse_brightness("120 100"), None);
+        assert_eq!(super::parse_brightness("-1 100"), None);
+        assert_eq!(super::parse_brightness("5 0"), None);
+        assert_eq!(super::parse_brightness("5"), None);
+        assert_eq!(super::parse_brightness("5 100 7"), None);
+        assert_eq!(super::parse_brightness("x y"), None);
+    }
+
     #[test]
     fn ddc_displays_are_read_back_and_nonsense_is_left_out() {
         let known = super::parse_ddc_displays("DP-1 1\nHDMI-A-1 1\n  DP-3 2 \nbroken\nDP-2 x\n");

@@ -512,6 +512,30 @@ impl App {
         self.close_popup()
     }
 
+    /// What the host runs once at start, as init would: the brightness,
+    /// read a while later, in the background.
+    pub(crate) fn warm_up(&self) -> app::Task<Message> {
+        read_brightness(BRIGHTNESS_AFTER)
+    }
+
+    /// What stays connected in the host while the panel is closed too, so
+    /// as not to connect again at each opening: the accessibility protocol,
+    /// when a tile needs it.
+    pub(crate) fn lasting_subscription(&self) -> Subscription<Message> {
+        if self.wants_a11y() {
+            services::a11y_subscription().map(Message::A11y)
+        } else {
+            Subscription::none()
+        }
+    }
+
+    /// Whether the accessibility protocol is needed: binding it held the
+    /// compositor's rendering for up to ~170 ms (measured), so only for the
+    /// tiles that show what it tells.
+    fn wants_a11y(&self) -> bool {
+        wants_a11y(self.hosted, &self.tiles, |tile| self.panel_icons.get(BarItem::Tile(tile)) != Show::Never)
+    }
+
     /// Turns to a page while it shows.
     pub(crate) fn turn_to(&mut self, page: &str) -> app::Task<Message> {
         match Page::from_name(page) {
@@ -599,7 +623,8 @@ impl App {
                 }),
                 load_mixer(),
             ]),
-            Page::Displays => read_displays(services::DdcRead::All),
+            // The page of brightness: read now, as asked to see it.
+            Page::Displays => Task::batch([read_displays(services::DdcRead::All), read_brightness(Duration::ZERO)]),
             Page::Camera => read_camera(),
             _ => Task::none(),
         }
@@ -741,6 +766,34 @@ fn load_wifi(scan: bool, delay: Duration) -> app::Task<Message> {
     })
 }
 
+/// After starting, when the display's brightness is first asked for.
+const BRIGHTNESS_AFTER: Duration = Duration::from_secs(15);
+
+/// The display's brightness, asked of the settings daemon after `delay`;
+/// nothing if it doesn't answer (what's written down stays).
+fn read_brightness(delay: Duration) -> app::Task<Message> {
+    Task::future(async move {
+        tokio::time::sleep(delay).await;
+        match slow::bounded(Slow::Brightness, services::read_brightness()).await.flatten() {
+            Some(brightness) => cosmic::action::app(Message::Update(Update::Brightness(Some(brightness)))),
+            None => cosmic::action::app(Message::None),
+        }
+    })
+}
+
+/// The tiles that show what the accessibility protocol tells.
+const A11Y_TILES: [Tile; 2] = [Tile::Magnifier, Tile::InvertColors];
+
+/// Hosted, a panel with one of those tiles placed needs it; on the bar, one
+/// of them shown there.
+fn wants_a11y(hosted: bool, tiles: &[Placed], on_bar: impl Fn(Tile) -> bool) -> bool {
+    if hosted {
+        tiles.iter().any(|placed| A11Y_TILES.iter().any(|tile| placed.kind == Kind::Tile(*tile)))
+    } else {
+        A11Y_TILES.into_iter().any(on_bar)
+    }
+}
+
 /// The monitors, and the brightness asked for over DDC, which may hang.
 fn read_displays(read: services::DdcRead) -> app::Task<Message> {
     Task::future(async move {
@@ -861,6 +914,8 @@ impl cosmic::Application for App {
             panel_icons: PanelIcons::load(),
             layout: Layout::load(),
             primary_display: layout::primary_display(),
+            // As last read or set: the daemon is asked later, not now.
+            brightness: services::remembered_brightness(),
             ..Self::default()
         };
         // COSMIC_QS_PREVIEW=sound opens the popup on that page by itself, to
@@ -881,7 +936,7 @@ impl cosmic::Application for App {
             None => Task::none(),
         };
         // For the bar's icon, before the popup first opens.
-        (app, Task::batch([task, read_camera()]))
+        (app, Task::batch([task, read_camera(), read_brightness(BRIGHTNESS_AFTER)]))
     }
 
     fn core(&self) -> &app::Core {
@@ -1129,9 +1184,9 @@ impl cosmic::Application for App {
                     self.adjusting = Some(std::time::Instant::now());
                     // Never all the way to black.
                     *current = ((percent / 100.0 * *max as f32) as i32).max(*max / 100).max(1);
-                    let value = *current;
+                    let (value, max) = (*current, *max);
                     return Task::future(async move {
-                        services::set_brightness(value).await;
+                        services::set_brightness(value, max).await;
                         cosmic::action::app(Message::None)
                     });
                 }
@@ -1816,13 +1871,13 @@ impl cosmic::Application for App {
             services::subscription().map(Message::Update),
             services::settings_subscription().map(|()| Message::SettingsChanged),
             workspaces::subscription().map(Message::Workspaces),
-            services::a11y_subscription().map(Message::A11y),
             cosmic_settings_accessibility_subscription::subscription().map(Message::ScreenReader),
             media::subscription().map(Message::Media),
             audio::privacy_subscription().map(Message::Privacy),
             notifications::subscription().map(|()| Message::NotificationsChanged),
             crate::clipboard::subscription().map(|()| Message::ClipboardChanged),
         ];
+        subscriptions.push(self.lasting_subscription());
         // The screen's size, for the popup's height.
         subscriptions.push(event::listen_with(|event, _, _| {
             use iced::event::wayland::{Event as Wayland, OutputEvent};
@@ -2229,6 +2284,19 @@ mod tests {
     #[test]
     fn camera_page_by_name() {
         assert_eq!(Page::from_name("camera"), Some(Page::Camera));
+    }
+
+    #[test]
+    fn the_accessibility_protocol_only_for_the_tiles_that_show_it() {
+        let with = |tile| vec![Placed::new(Kind::Tile(Tile::Wifi)), Placed::new(Kind::Tile(tile))];
+        let never = |_: Tile| false;
+        // Hosted: the panel's tiles decide, not the bar.
+        assert!(wants_a11y(true, &with(Tile::Magnifier), never));
+        assert!(wants_a11y(true, &with(Tile::InvertColors), never));
+        assert!(!wants_a11y(true, &with(Tile::ScreenReader), |_| true));
+        // On the bar: what the bar shows.
+        assert!(wants_a11y(false, &[], |tile| tile == Tile::Magnifier));
+        assert!(!wants_a11y(false, &with(Tile::Magnifier), never));
     }
 
     #[test]

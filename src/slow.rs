@@ -17,11 +17,13 @@ pub enum Slow {
     Wifi,
     /// The clipboard's history, from its file.
     Clipboard,
+    /// The display's brightness, from COSMIC's settings daemon.
+    Brightness,
 }
 
 impl Slow {
     #[cfg(test)]
-    pub const ALL: [Slow; 4] = [Slow::Sample, Slow::Ddc, Slow::Wifi, Slow::Clipboard];
+    pub const ALL: [Slow; 5] = [Slow::Sample, Slow::Ddc, Slow::Wifi, Slow::Clipboard, Slow::Brightness];
 
     pub const fn limit(self) -> Duration {
         match self {
@@ -30,6 +32,7 @@ impl Slow {
             // The scan waits three seconds before listing.
             Slow::Wifi => Duration::from_secs(10),
             Slow::Clipboard => Duration::from_secs(2),
+            Slow::Brightness => Duration::from_secs(3),
         }
     }
 }
